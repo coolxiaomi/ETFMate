@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment config (contains local paths)
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# SQLite database files
+*.db
+*.db-wal
+*.db-shm
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Coverage
+coverage/
+
+# npm pack artifacts
+*.tgz
