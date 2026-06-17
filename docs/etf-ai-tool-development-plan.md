@@ -1,6 +1,7 @@
 # ETFMate AI 工具开发文档
 
-> 运行、实现、安全和分析规则的长期约定见 `docs/etfmate-operating-contract.md`。原 `.agents/skills/etfmate-skill` 目录只是 Agent 触发包装，不是可执行程序，已整理为项目文档。
+> skill的名称为ETFMate-skill
+> skill输出的报告和回答都是中文 
 
 ## 1. 目标
 

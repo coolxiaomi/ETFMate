@@ -1,0 +1,4 @@
+interface:
+  display_name: "ETFMate Skill"
+  short_description: "本地 ETF 持仓、网格交易、行情指标与每日复盘分析"
+  default_prompt: "Use $etfmate-skill to initialize and run the local ETFMate daily ETF review workflow."
