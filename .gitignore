@@ -219,7 +219,7 @@ __marimo__/
 
 # ETFMate local runtime data
 runtime/
-data/raw/
-data/reports/
+data/
 .env
 .pytest_cache/
+tests/
