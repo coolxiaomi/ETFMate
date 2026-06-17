@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def render_markdown(date: str, recommendations: list[dict], grid_advices: list[dict], trade_review: dict) -> str:
+def render_markdown(date: str, recommendations: list[dict], grid_advices: list[dict], trade_review: dict, data_completeness: dict | None = None) -> str:
     lines = [f"# ETFMate 每日复盘 {date}", ""]
     lines.extend(["## 持仓建议", ""])
     if not recommendations:
@@ -88,13 +88,23 @@ def render_markdown(date: str, recommendations: list[dict], grid_advices: list[d
             f"最需要改进的一点：{trade_review['improvement']}",
             f"明日计划：{trade_review['tomorrow_plan']}",
         ])
-    lines.extend(["", "报告发布：如需公网分享，询问用户是否使用 shareone 发布，名称格式 `ETFMate-report-YYYY年MM月DD日`。", ""])
+    lines.extend(["", "## 数据完整性", ""])
+    if data_completeness:
+        lines.extend([
+            "| 项目 | 数量 | 来源 | 备注 |",
+            "|---|---:|---|---|",
+        ])
+        for item in data_completeness.get("items", []):
+            lines.append(f"| {item['label']} | {item['count']} | {item['source']} | {item['note']} |")
+    else:
+        lines.append("数据完整性信息未提供。")
+    lines.extend(["", "报告发布：如需公网分享，询问用户是否使用 shareone 发布，名称格式 `ETFMate-report-YYYY-MM-DD-HH-mm-ss`。", ""])
     return "\n".join(lines)
 
 
-def write_report(path: Path, date: str, recommendations: list[dict], grid_advices: list[dict], trade_review: dict) -> Path:
+def write_report(path: Path, date: str, recommendations: list[dict], grid_advices: list[dict], trade_review: dict, data_completeness: dict | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_markdown(date, recommendations, grid_advices, trade_review), encoding="utf-8")
+    path.write_text(render_markdown(date, recommendations, grid_advices, trade_review, data_completeness), encoding="utf-8")
     return path
 
 

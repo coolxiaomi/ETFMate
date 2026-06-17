@@ -122,12 +122,43 @@ def run_analyze(root: Path, run_date: str, extra_codes: list[str] | None = None)
 
 def run_report(root: Path, run_date: str) -> None:
     analysis = read_json(root / "data/raw/market" / run_date / "analysis.json", default={})
+    account = _read_first_json(
+        root / "data/raw/ths" / run_date / "account.json",
+        root / "data/manual/account.json",
+        default={},
+    )
+    grid_payload = _read_first_json(
+        root / "data/raw/touker" / run_date / "grids.json",
+        root / "data/manual/grids.json",
+        default={},
+    )
     recommendations = analysis.get("recommendations", [])
     grid_advices = analysis.get("grid_advices", [])
     review = analysis.get("trade_review") or review_trades([])
     if analysis.get("trade_reviews"):
         review = {**review, "periods": analysis["trade_reviews"]}
-    out = write_report(root / "data/reports" / f"{run_date}-etf-review.md", run_date, recommendations, grid_advices, review)
+    # Build data completeness
+    positions_count = len(_items(account, "positions"))
+    trades_count = len(_items(account, "trades"))
+    grids_list = _items(grid_payload, "grids")
+    grids_count = len(grids_list)
+    grids_active = sum(1 for g in grids_list if _bool(_pick(g, "enabled", "启用", default=True)))
+    snapshots = analysis.get("market_snapshots", [])
+    sources = set()
+    for s in snapshots:
+        dq = s.get("data_quality", "") if isinstance(s, dict) else ""
+        if dq:
+            sources.add(dq)
+    degraded = [s.get("data_quality", "") for s in snapshots if isinstance(s, dict) and "tencent" in s.get("data_quality", "")]
+    data_completeness = {
+        "items": [
+            {"label": "同花顺持仓", "count": str(positions_count), "source": "THS 账户页", "note": "完整" if positions_count else "无数据"},
+            {"label": "同花顺交易记录", "count": f"{trades_count} 笔", "source": "THS 账户页", "note": "完整" if trades_count else "无数据"},
+            {"label": "Touker 网格", "count": f"{grids_count}（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker CDP", "note": "完整" if grids_count else "无数据"},
+            {"label": "行情/K 线", "count": f"{len(snapshots)} 只", "source": "; ".join(sources) or "N/A", "note": "降级到腾讯" if degraded else "完整"},
+        ]
+    }
+    out = write_report(root / "data/reports" / f"{run_date}-etf-review.md", run_date, recommendations, grid_advices, review, data_completeness)
     print(f"已生成报告: {out}")
 
 

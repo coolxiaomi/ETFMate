@@ -105,7 +105,7 @@ etfmate daily
 
 每个周期都要包含评分、交易笔数、买入金额、卖出金额、优点、问题、最需要改进的一点、下一步计划。
 
-报告生成后，询问用户是否使用 `$shareone` 发布报告。用户同意后再按 shareone skill 的安全提示和确认流程发布，发布名称使用 `ETFMate-report-YYYY年MM月DD日`。
+报告生成后，询问用户是否使用 `$shareone` 发布报告。用户同意后再按 shareone skill 的安全提示和确认流程发布，发布名称使用 `ETFMate-report-YYYY-MM-DD`。
 
 ## 资源说明
 
