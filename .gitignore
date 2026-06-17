@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ETFMate local runtime data
+runtime/
+data/raw/
+data/reports/
+.env
+.pytest_cache/

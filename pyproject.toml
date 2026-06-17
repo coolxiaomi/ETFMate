@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "etfmate"
+version = "0.1.0"
+description = "本地 ETF 持仓与网格交易辅助分析工具"
+requires-python = ">=3.10"
+dependencies = [
+  "playwright",
+  "pandas",
+  "stockstats",
+  "requests",
+  "mootdx",
+  "pydantic",
+  "rich",
+  "jinja2",
+]
+
+[project.scripts]
+etfmate = "etfmate.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
