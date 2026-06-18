@@ -2,63 +2,103 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
-from .session import BrowserSession, ensure_login, require_login
+from .session import WebAccessSession, ensure_login, require_login
 
 
 TOUKER_URL = "https://m.touker.com/fd/conditions/monitoring"
 
 
-def touker_login_check(page) -> bool:
-    text = page.locator("body").inner_text(timeout=5000)
+def touker_login_check(session: WebAccessSession) -> bool:
+    text = str(session.eval("document.body ? document.body.innerText : ''") or "")
     negative = ["登录", "验证码", "手机号"]
     positive = ["监控", "网格", "条件", "触发"]
     return any(word in text for word in positive) and not any(word in text for word in negative)
 
 
 def login(root: Path) -> None:
-    with BrowserSession(root, mobile=True) as session:
-        ensure_login(session.page(), TOUKER_URL, touker_login_check, "请在打开的移动端浏览器窗口中完成 Touker 登录。")
+    with WebAccessSession(root) as session:
+        ensure_login(session, TOUKER_URL, touker_login_check, "请在 Chrome 中完成 Touker 登录。")
 
 
 def collect(root: Path, out_dir: Path) -> dict:
-    captures: list[dict] = []
-    with BrowserSession(root, mobile=True) as session:
-        page = session.page()
-        page.on("response", lambda r: _capture_json_response(r, captures))
-        require_login(page, TOUKER_URL, touker_login_check, "Touker 未登录或登录验证未完成，请在当前 Chrome 中手动登录后重新运行。")
-        page.wait_for_timeout(3000)
+    with WebAccessSession(root) as session:
+        require_login(session, TOUKER_URL, touker_login_check, "Touker 未登录或登录验证未完成，请在 Chrome 中手动登录后重新运行。")
+        for _ in range(12):
+            session.eval(_SCROLL_JS)
+            time.sleep(0.25)
+        snapshot = _as_dict(session.eval(_SNAPSHOT_JS))
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "grids.html").write_text(page.content(), encoding="utf-8")
-        page.screenshot(path=str(out_dir / "grids.png"), full_page=True)
-        (out_dir / "network.json").write_text(json.dumps(captures, ensure_ascii=False, indent=2), encoding="utf-8")
-    grids = _dedupe(_extract_records(captures, _looks_like_grid), "id", "conditionId", "code", "证券代码", "symbol")
-    return {"grids": grids, "network": captures}
+        (out_dir / "grids_snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        (out_dir / "grids_text.txt").write_text(str(snapshot.get("text", "")), encoding="utf-8")
+        session.screenshot(out_dir / "grids.png")
+
+    records = _records_from_snapshot(snapshot)
+    records.extend(_grid_records_from_text(str(snapshot.get("text", ""))))
+    grids = _dedupe(_extract_records(records, _looks_like_grid), "id", "conditionId", "code", "证券代码", "symbol", "name", "名称")
+    expected = _expected_grid_count(str(snapshot.get("text", "")))
+    if expected and len(grids) < expected:
+        raise RuntimeError(f"Touker 网格未采齐：页面显示监控中 {expected} 条，当前只识别到 {len(grids)} 条。请确认页面已完整加载后重新运行。")
+    return {"grids": grids, "snapshot": snapshot, "expected_count": expected}
 
 
-def _capture_json_response(response, captures: list[dict]) -> None:
-    content_type = response.headers.get("content-type", "")
-    if "json" not in content_type and "javascript" not in content_type:
-        return
-    item = {"url": response.url, "status": response.status}
-    try:
-        item["body"] = response.json()
-    except Exception:
+def _records_from_snapshot(snapshot: dict[str, Any]) -> list[dict]:
+    records: list[dict] = []
+    for block in snapshot.get("blocks") or []:
+        if isinstance(block, dict):
+            records.append(block)
+    for value in (snapshot.get("localStorage") or {}).values():
+        records.extend(_json_records(value))
+    for value in (snapshot.get("sessionStorage") or {}).values():
+        records.extend(_json_records(value))
+    return records
+
+
+def _grid_records_from_text(text: str) -> list[dict]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    records: list[dict] = []
+    for idx, line in enumerate(lines):
+        match = re.search(r"(?<!\d)(?:sh|sz)?(\d{6})(?!\d)", line, flags=re.I)
+        if not match:
+            continue
+        window = lines[max(0, idx - 4) : idx + 20]
+        records.append({"code": match.group(1), "name": line, "status": " ".join(window), "raw_text": "\n".join(window)})
+    return records
+
+
+def _expected_grid_count(text: str) -> int | None:
+    match = re.search(r"监控中\s*\(?\s*(\d+)\s*\)?", text)
+    return int(match.group(1)) if match else None
+
+
+def _json_records(value: Any) -> list[dict]:
+    if isinstance(value, str):
         try:
-            text = response.text()
-            item["text"] = text[:20000]
-            item["body"] = json.loads(text)
-        except Exception:
-            pass
-    captures.append(item)
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    return _walk_records(value, lambda item: True)
 
 
-def _extract_records(captures: list[dict], predicate) -> list[dict]:
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {"value": parsed}
+        except json.JSONDecodeError:
+            return {"text": value}
+    return {"value": value}
+
+
+def _extract_records(records: list[dict], predicate) -> list[dict]:
     result: list[dict] = []
-    for capture in captures:
-        result.extend(_walk_records(capture.get("body"), predicate))
+    for record in records:
+        result.extend(_walk_records(record, predicate))
     return result
 
 
@@ -77,8 +117,9 @@ def _walk_records(value: Any, predicate) -> list[dict]:
 
 def _looks_like_grid(item: dict) -> bool:
     keys = set(item)
+    text = json.dumps(item, ensure_ascii=False)
     has_code = any(_is_code(item.get(key)) for key in ("code", "symbol", "stockCode", "securityCode", "证券代码", "代码"))
-    has_grid_text = any(word in " ".join(keys) for word in ("grid", "condition", "trigger", "rise", "fall", "rebound", "pullback", "buy", "sell", "网格", "条件", "触发", "买入", "卖出"))
+    has_grid_text = any(word in text for word in ("grid", "condition", "trigger", "rise", "fall", "rebound", "pullback", "buy", "sell", "网格", "条件", "触发", "买入", "卖出", "基准"))
     has_param = any(key in keys for key in ("buy_fall_pct", "sell_rise_pct", "buyFallPct", "sellRisePct", "fallRate", "riseRate", "order_quantity", "buy_quantity", "sell_quantity"))
     return has_code and (has_grid_text or has_param)
 
@@ -99,3 +140,40 @@ def _dedupe(items: list[dict], *keys: str) -> list[dict]:
         seen.add(identity)
         result.append(item)
     return result
+
+
+_SCROLL_JS = r"""
+(() => {
+  const candidates = Array.from(document.querySelectorAll("*"))
+    .filter((el) => el.scrollHeight > el.clientHeight + 50)
+    .sort((a, b) => b.scrollHeight - a.scrollHeight);
+  for (const el of candidates.slice(0, 5)) {
+    el.scrollTop = Math.min(el.scrollHeight, el.scrollTop + Math.max(600, el.clientHeight));
+    el.dispatchEvent(new Event("scroll", { bubbles: true }));
+  }
+  window.scrollBy(0, 600);
+  return "ok";
+})()
+"""
+
+_SNAPSHOT_JS = r"""
+(() => {
+  const text = document.body ? document.body.innerText : "";
+  const blocks = Array.from(document.querySelectorAll("div,section,article,li"))
+    .map((el) => ({ text: el.innerText ? el.innerText.trim() : "", className: el.className || "", id: el.id || "" }))
+    .filter((item) => /(\d{6}|网格|条件|触发|基准|买入|卖出)/.test(item.text))
+    .slice(0, 1000);
+  const storage = (source) => Object.fromEntries(Array.from({ length: source.length }, (_, i) => {
+    const key = source.key(i);
+    return [key, source.getItem(key)];
+  }).filter(([key]) => key));
+  return JSON.stringify({
+    url: location.href,
+    title: document.title,
+    text,
+    blocks,
+    localStorage: storage(localStorage),
+    sessionStorage: storage(sessionStorage),
+  });
+})()
+"""

@@ -10,7 +10,7 @@ from etfmate.analysis.layered_context import build_layered_context, context_to_d
 from etfmate.analysis.recommendation import recommend
 from etfmate.analysis.trade_reviewer import review_trade_periods, review_trades
 from etfmate.browser import ths_account, touker_grid
-from etfmate.browser.session import ChromeNotReadyError, LoginRequiredError, require_cdp_url
+from etfmate.browser.session import LoginRequiredError, WebAccessNotReadyError, require_web_access_proxy
 from etfmate.market.providers import build_market_snapshot, normalize_etf_code
 from etfmate.report.daily_report import write_report
 from etfmate.storage.models import GridConfig, Position, Trade
@@ -55,12 +55,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.cmd == "run":
             run_id = run_id_str(args.run_id)
-            require_cdp_url(root / "runtime/chrome-cdp-profile")
+            require_web_access_proxy()
             run_collect(root, run_id)
             run_analyze(root, run_id)
             run_report(root, run_id)
             return 0
-    except (ChromeNotReadyError, LoginRequiredError, RuntimeError) as exc:
+    except (WebAccessNotReadyError, LoginRequiredError, RuntimeError) as exc:
         print(str(exc))
         return 2
     return 1

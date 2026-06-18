@@ -112,7 +112,7 @@ data/raw/touker/RUN_ID/grids.json
 data/raw/market/RUN_ID/snapshots.json
 data/raw/market/RUN_ID/analysis.json
 data/reports/RUN_ID-etf-realtime.html
-runtime/chrome-cdp-profile/
+runtime/
 ```
 
 `runtime/`、`data/raw/`、`data/reports/*.html`、`.env` 不应提交 Git。

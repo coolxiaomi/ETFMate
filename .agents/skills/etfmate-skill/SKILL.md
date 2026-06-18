@@ -1,6 +1,6 @@
 ---
 name: etfmate-skill
-description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用于创建、完善或运行 ETFMate 工具：先用 Playwright/CDP 连接用户已打开且已登录的 Chrome，实时读取同花顺投资账本和 Touker 网格页，再结合 a-stock-data 七层数据架构、行情指标、持仓备注和网格参数生成中文 HTML 实时分析报告。触发场景包括 ETFMate、ETF 实时分析、同花顺投资账本采集、Touker 网格设置、ETF 持仓建议、网格调参建议、Playwright 连接已登录 Chrome、多层证据分析、本地 CLI 工具开发。
+description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用于创建、完善或运行 ETFMate 工具：必须先加载并使用 $web-access 连接用户已登录的 Chrome，实时读取同花顺投资账本和 Touker 网格页，再结合 $a-stock-data 七层数据架构、行情指标、持仓备注和网格参数生成中文 HTML 实时分析报告。触发场景包括 ETFMate、ETF 实时分析、同花顺投资账本采集、Touker 网格设置、ETF 持仓建议、网格调参建议、web-access 登录态页面采集、多层证据分析、本地 CLI 工具开发。
 ---
 
 # ETFMate Skill
@@ -11,6 +11,7 @@ description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用于�
 - ETFMate 是“实时分析”工具，不是日度批处理。每次运行都是一次全新的实时采集和分析，报告必须显示具体分析日期时间，不写“每日报告/日度报告”。
 - 工具只做分析与辅助决策，默认不自动下单，不绕过验证码、短信、人脸、设备验证或平台风控。
 - 正式分析必须同时拿到同花顺投资账本持仓/交易数据和 Touker 网格数据。任一核心源未登录、未加载或未采齐时立即停止，不生成最终建议，不用手工样例或指定代码替代。
+- 所有联网、登录态页面读取、网页交互和动态渲染页面采集都必须通过 `$web-access` skill 执行，不再使用旧的直连浏览器自动化实现。
 - 行情和技术指标交给 `$a-stock-data` 或当前项目行情适配器自行决策数据源；本 skill 不固定要求腾讯、mootdx、百度或东方财富的优先级。
 - 分析必须按 `$a-stock-data` 七层架构组织证据：行情技术、研报预期、热点信号、资金筹码、新闻舆情、基础数据、公告事件。当前实现拿不到的层必须明确标记为“待接入/缺失”，并降低建议强度；不得用技术指标冒充研报、新闻、公告等深层结论。
 - 同花顺投资账本持仓“备注”列是用户本人对 ETF 的看法，分析时必须读取并作为辅助信号。市场指标与备注一致时可以增强建议置信度；不一致时必须指出冲突并降低动作强度。
@@ -19,11 +20,16 @@ description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用于�
 
 每次运行 ETFMate 必须按以下顺序执行，不能跳步：
 
-1. 先检测 Chrome CDP 是否可用。默认端点是 `http://127.0.0.1:9222`，也可用 `ETFMATE_CDP_URL` 覆盖。必须验证 `/json/version` 返回包含 `webSocketDebuggerUrl` 的 JSON；404、空响应或无该字段都视为不可用。
-2. 如果 Chrome 没打开、端口不可用或不是有效 DevTools HTTP API，立即停止。提示用户用独立 profile 打开 Chrome，开启远程调试，并在同一浏览器里登录同花顺投资账本和 Touker。
-3. Chrome 可连接后，先进入同花顺投资账本和 Touker 页面采集数据。此时仍不要分析。
-4. 如果任一页面是登录页、验证码页、风控页、协议确认页或页面未加载出关键数据，立即停止并提示用户手动处理；用户处理后重新运行或继续同一流程。
+1. 先加载 `$web-access` skill，并按其前置检查启动/确认 CDP Proxy。必须向用户展示 web-access 的账号风险提示。
+2. 使用 web-access 的 CDP Proxy 操作用户 Chrome。优先创建后台 tab，不主动改动用户已有 tab；任务结束关闭自己创建的 tab。
+3. 先进入同花顺投资账本和 Touker 页面采集数据，此时仍不要分析。
+4. 如果任一页面是登录页、验证码页、风控页、协议确认页或页面未加载出关键数据，立即停止并提示用户在 Chrome 中手动处理；用户处理后刷新或继续同一流程。
 5. 只有同花顺持仓/交易和 Touker 网格都采集成功，才继续行情指标、建议生成和 HTML 报告。
+
+目标页面：
+
+- 同花顺投资账本：`https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO`
+- Touker 网格：`https://m.touker.com/fd/conditions/monitoring`
 
 推荐运行命令：
 
@@ -41,26 +47,21 @@ etfmate report --run-id 20260618-153000
 
 不要把 `daily`、`--date`、`--codes` 或 `data/manual/*.example.json` 作为正式分析流程。
 
-## Playwright / Chrome CDP 约束
+## web-access 采集要求
 
-- 首选连接用户已经打开、允许远程调试、且已登录两个站点的 Chrome：`playwright.chromium.connect_over_cdp`。
-- 不要自动新开 Playwright 自带浏览器来替代用户登录态。需要新开时，也必须让用户在同一个可验证 CDP profile 内完成同花顺和 Touker 登录。
-- 若 `9222/json/version` 返回 404，先枚举 Chrome 监听端口并逐个验证，不要反复重试同一个坏端口。
-- 可用端点必须返回 `webSocketDebuggerUrl`；只监听了 TCP 端口不代表 Playwright 可连接。
-- 同花顺目标页：`https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO`
-- Touker 目标页：`https://m.touker.com/fd/conditions/monitoring`
-- Touker 移动端可能只渲染可见卡片。必须定位内部滚动容器并滚动读取，按 ETF 代码去重，直到采集数量与页面“监控中(N)”一致。
+- 对已知 URL 的登录态页面，直接使用 web-access 的浏览器 CDP 模式，不用 WebFetch、curl 或搜索引擎替代。
+- 启动检查使用 web-access 自带脚本：
 
-用户需要打开调试 Chrome 时，给出：
-
-```powershell
-& "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" `
-  --remote-debugging-port=9222 `
-  --remote-debugging-address=127.0.0.1 `
-  --user-data-dir="$PWD\runtime\chrome-cdp-profile"
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/check-deps.mjs"
 ```
 
-随后提示用户在该 Chrome 中打开 `chrome://inspect/#remote-debugging`，开启 `Allow remote debugging for this browser instance`，并登录同花顺投资账本和 Touker。
+- CDP Proxy 默认地址为 `http://localhost:3456`；当前 CLI 可用 `ETFMATE_WEB_ACCESS_PROXY_URL` 覆盖。
+- 采集时优先用 `/eval` 读取 DOM、表格、页面文本、localStorage/sessionStorage 和页面内已加载数据结构；必要时用 `/screenshot` 留存证据。
+- 如果程序化 `/eval` 受阻，切换为 web-access 的 GUI 交互方式点击、滚动、刷新，再重新读取 DOM。不要在同一个失败选择器上反复重试。
+- 同花顺采集必须覆盖当前持仓、可用数量、成本价、现价、市值、浮盈亏、仓位占比、交易记录、清仓数据和持仓备注/看法列。
+- Touker 移动端可能只渲染可见卡片。必须定位内部滚动容器并滚动读取，按 ETF 代码去重，直到采集数量与页面 `监控中(N)` 一致。
+- 采集完成后保存原始证据快照，包括页面文本、结构化数据、截图和最终 JSON；不要只保存分析结果。
 
 ## 分析要求
 
@@ -91,6 +92,6 @@ etfmate report --run-id 20260618-153000
 
 ## 资源说明
 
-- `scripts/health_check.py`：检查 Python、Playwright、pandas、stockstats、mootdx、requests 和 a-stock-data skill 可见性。
-- `scripts/scaffold_etfmate.py`：生成或补齐 ETFMate Python CLI 项目骨架。维护该脚本时必须保持实时 `run/run_id` 流程，不要回退到 `daily/date`。
+- `scripts/health_check.py`：检查 Python 分析依赖、`a-stock-data` skill、`web-access` skill 和 web-access Proxy 可见性。
+- `scripts/scaffold_etfmate.py`：生成或补齐 ETFMate Python CLI 项目骨架。维护该脚本时必须保持实时 `run/run_id` 流程，并使用 web-access Proxy 采集，不要回退到旧浏览器自动化、`daily/date` 或样例数据流程。
 - `references/etfmate-domain-rules.md`：数据契约、分析规则、安全边界和报告要求。
