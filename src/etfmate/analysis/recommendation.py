@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+from typing import Any
+
+from etfmate.analysis.layered_context import LayeredContext, normalize_context
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position
 
 
-def recommend(position: Position | None, grid: GridConfig | None, market: MarketSnapshot, all_positions: list[Position] | None = None) -> dict:
+def recommend(
+    position: Position | None,
+    grid: GridConfig | None,
+    market: MarketSnapshot,
+    all_positions: list[Position] | None = None,
+    layered_context: LayeredContext | dict[str, Any] | None = None,
+) -> dict:
     action = "持有"
     reasons: list[str] = []
     risks: list[str] = []
@@ -82,6 +91,22 @@ def recommend(position: Position | None, grid: GridConfig | None, market: Market
     if market.data_quality != "ok":
         risks.append(f"行情数据完整性: {market.data_quality}")
 
+    layer_payload = normalize_context(layered_context)
+    if layer_payload:
+        confidence = _num_or_zero(layer_payload.get("confidence"))
+        total_score = _num_or_zero(layer_payload.get("total_score"))
+        if confidence < 45 and action in {"买入", "卖出"}:
+            action = "分批买入" if action == "买入" else "减仓"
+            risks.append("七层证据置信度不足，强动作降级为分批或部分处理")
+        elif confidence < 45 and action == "分批买入":
+            risks.append("七层证据置信度不足，只适合小额试探，不适合扩大仓位")
+        if total_score <= -2 and action in {"买入", "分批买入"}:
+            action = "持有"
+            risks.append("多层证据偏弱，暂不把低位信号直接解释为加仓信号")
+        elif total_score >= 2 and action == "减仓" and position and position.pnl_pct < 0:
+            risks.append("多层证据未明显转弱，亏损仓位不宜一次性大幅减仓")
+        reasons.append(str(layer_payload.get("summary") or "七层证据已纳入"))
+
     action_quantity, position_plan = _action_plan(action, position, grid)
     return {
         "code": market.code,
@@ -125,6 +150,9 @@ def recommend(position: Position | None, grid: GridConfig | None, market: Market
         "risks": risks or ["暂无明显新增风险"],
         "watch_price": _watch_price(market),
         "indicators": "；".join(scores) if scores else "指标不足",
+        "layered_context": layer_payload,
+        "layered_confidence": layer_payload.get("confidence") if layer_payload else None,
+        "layered_score": layer_payload.get("total_score") if layer_payload else None,
     }
 
 
@@ -197,6 +225,13 @@ def _round_lot(value: float) -> float:
     if value <= 0:
         return 0
     return max(100, round(value / 100) * 100)
+
+
+def _num_or_zero(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _note_signal(note: str | None) -> str:

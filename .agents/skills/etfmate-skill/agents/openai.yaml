@@ -1,4 +1,4 @@
 interface:
   display_name: "ETFMate Skill"
-  short_description: "本地 ETF 实时持仓、网格交易、行情指标与 HTML 分析"
-  default_prompt: "Use $etfmate-skill to run a real-time ETFMate analysis from logged-in 同花顺投资账本 and Touker pages."
+  short_description: "本地 ETF 实时持仓、网格交易、七层证据与 HTML 分析"
+  default_prompt: "Use $etfmate-skill to run a real-time ETFMate analysis from logged-in 同花顺投资账本 and Touker pages with a-stock-data seven-layer evidence."

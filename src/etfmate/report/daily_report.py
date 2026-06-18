@@ -109,6 +109,7 @@ def _holding_view(item: dict | None) -> dict[str, Any]:
         _row("BOLL", _boll_summary(item), _boll_levels(item), _boll_alert(item)),
         _row("MA", _ma_summary(item), _ma_compare(item), _ma_alert(item)),
         _row("量能(VOL)", _volume_summary(item), _volume_compare(item), _volume_alert(item)),
+        _merged_row("七层证据", _layered_evidence_html(item)),
         _row("真实波幅(ATR)", _atr_summary(item), _atr_compare(item), _atr_alert(item)),
         _row("乖离率(BIAS)", _bias_summary(item), _bias_compare(item), _bias_alert(item)),
         _merged_row("动作", _action_merged_html(item)),
@@ -381,6 +382,42 @@ def _overview_html(item: dict) -> str:
             f'<span class="{cls}">{escape(risk_text)}</span>',
         ]
     )
+
+
+def _layered_evidence_html(item: dict) -> str:
+    context = item.get("layered_context") or {}
+    if not isinstance(context, dict):
+        return _cell_html("七层证据未生成")
+    layers = context.get("layers") or []
+    if not layers:
+        return _cell_html("七层证据未生成")
+    chips = []
+    for layer in layers:
+        name = _cell(layer.get("name"))
+        status = _cell(layer.get("status"))
+        score = _float_or_none(layer.get("score"))
+        score_text = "" if score is None or score == 0 else f" {score:+.0f}"
+        cls = _layer_status_class(status, score)
+        chips.append(_span(f"{name}:{status}{score_text}", cls))
+    summary = _cell(context.get("summary"))
+    return _join_html(
+        [
+            _inline_label("置信度", f"{_num(context.get('confidence'), 0)}%"),
+            _inline_label("总分", _num(context.get("total_score"), 0)),
+            " ".join(chips),
+            escape(summary),
+        ]
+    )
+
+
+def _layer_status_class(status: str, score: float | None) -> str:
+    if status == "待接入":
+        return "attention"
+    if score is not None and score < 0:
+        return "warn"
+    if score is not None and score > 0:
+        return "profit"
+    return "neutral"
 
 
 def _filtered_risks(item: dict) -> list[str]:

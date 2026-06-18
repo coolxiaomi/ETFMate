@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from etfmate.analysis.grid_advisor import advise_grid
+from etfmate.analysis.layered_context import build_layered_context, context_to_dict
 from etfmate.analysis.recommendation import recommend
 from etfmate.analysis.trade_reviewer import review_trade_periods, review_trades
 from etfmate.browser import ths_account, touker_grid
@@ -89,12 +90,27 @@ def run_analyze(root: Path, run_id: str) -> None:
     snapshots_by_code = {item.code: item for item in snapshots}
     positions_by_code = {item.code: item for item in positions}
     grids_by_code = {item.code: item for item in grids}
+    layered_contexts = {
+        item.code: build_layered_context(positions_by_code.get(item.code), grids_by_code.get(item.code), item, positions)
+        for item in snapshots
+    }
     recommendations = [
-        recommend(positions_by_code.get(item.code), grids_by_code.get(item.code), item, all_positions=positions)
+        recommend(
+            positions_by_code.get(item.code),
+            grids_by_code.get(item.code),
+            item,
+            all_positions=positions,
+            layered_context=layered_contexts.get(item.code),
+        )
         for item in snapshots
     ]
     grid_advices = [
-        advise_grid(item, snapshots_by_code[item.code], positions_by_code.get(item.code))
+        advise_grid(
+            item,
+            snapshots_by_code[item.code],
+            positions_by_code.get(item.code),
+            layered_context=layered_contexts.get(item.code),
+        )
         for item in grids
         if item.code in snapshots_by_code
     ]
@@ -105,6 +121,7 @@ def run_analyze(root: Path, run_id: str) -> None:
         "positions_count": len(positions),
         "grids_count": len(grids),
         "market_snapshots": snapshots,
+        "layered_contexts": {code: context_to_dict(context) for code, context in layered_contexts.items()},
         "recommendations": recommendations,
         "grid_advices": grid_advices,
         "trade_review": review_trades(trades),
@@ -134,12 +151,22 @@ def run_report(root: Path, run_id: str) -> None:
     grids_active = sum(1 for g in grids_list if _bool(_pick(g, "enabled", "启用", default=True)))
     snapshots = analysis.get("market_snapshots", [])
     sources = {s.get("data_quality", "") for s in snapshots if isinstance(s, dict) and s.get("data_quality")}
+    layered_contexts = analysis.get("layered_contexts") or {}
+    layer_count = len(layered_contexts)
+    avg_layer_confidence = _avg_number(item.get("confidence") for item in layered_contexts.values() if isinstance(item, dict))
+    layer_sources = _layer_source_summary(layered_contexts)
     data_completeness = {
         "items": [
             {"label": "同花顺持仓", "count": str(positions_count), "source": "同花顺投资账本", "note": "完整" if positions_count else "无数据"},
             {"label": "同花顺交易记录", "count": f"{trades_count} 笔", "source": "同花顺投资账本", "note": "完整" if trades_count else "无数据"},
             {"label": "Touker 网格", "count": f"{grids_count}（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker", "note": "完整" if grids_count else "无数据"},
             {"label": "行情/K 线", "count": f"{len(snapshots)} 只", "source": "; ".join(sorted(sources)) or "N/A", "note": "由 a-stock-data/本地行情适配器决策"},
+            {
+                "label": "七层证据",
+                "count": f"{layer_count} 只，平均置信度 {_fmt_pct(avg_layer_confidence)}",
+                "source": layer_sources,
+                "note": "缺失层不生成假结论，只降低建议强度",
+            },
         ]
     }
     label = analysis.get("analysis_time") or _analysis_time(run_id)
@@ -278,6 +305,35 @@ def _bool(value: Any) -> bool:
         return value
     text = str(value).strip().lower()
     return text not in {"false", "0", "否", "暂停", "停用", "disabled"}
+
+
+def _avg_number(values: Any) -> float | None:
+    nums = []
+    for value in values:
+        try:
+            nums.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return sum(nums) / len(nums) if nums else None
+
+
+def _fmt_pct(value: float | None) -> str:
+    return "-" if value is None else f"{value:.0f}%"
+
+
+def _layer_source_summary(layered_contexts: dict) -> str:
+    if not layered_contexts:
+        return "N/A"
+    statuses: dict[str, int] = {}
+    for context in layered_contexts.values():
+        if not isinstance(context, dict):
+            continue
+        for layer in context.get("layers") or []:
+            status = str(layer.get("status") or "未知")
+            statuses[status] = statuses.get(status, 0) + 1
+    if not statuses:
+        return "N/A"
+    return "；".join(f"{key} {value} 层次项" for key, value in sorted(statuses.items()))
 
 
 if __name__ == "__main__":

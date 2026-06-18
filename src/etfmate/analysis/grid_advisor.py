@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from typing import Any
+
+from etfmate.analysis.layered_context import LayeredContext, normalize_context
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position
 
 
-def advise_grid(grid: GridConfig, market: MarketSnapshot, position: Position | None = None) -> dict:
+def advise_grid(
+    grid: GridConfig,
+    market: MarketSnapshot,
+    position: Position | None = None,
+    layered_context: LayeredContext | dict[str, Any] | None = None,
+) -> dict:
     reasons: list[str] = []
     action = "维持"
     current_step = grid.grid_step_pct or _avg(grid.buy_fall_pct, grid.sell_rise_pct)
@@ -53,6 +61,21 @@ def advise_grid(grid: GridConfig, market: MarketSnapshot, position: Position | N
         suggested_buy_qty = _round_qty(position.quantity)
         reasons.append("当前持仓很小，买入数量不应明显超过现有持仓，先用小份额验证")
 
+    layer_payload = normalize_context(layered_context)
+    if layer_payload:
+        confidence = _num_or_zero(layer_payload.get("confidence"))
+        total_score = _num_or_zero(layer_payload.get("total_score"))
+        if confidence < 45 and action in {"调宽网格", "调窄网格"}:
+            action = "维持"
+            suggested_buy_fall = grid.buy_fall_pct
+            suggested_sell_rise = grid.sell_rise_pct
+            reasons.append("七层证据置信度不足，本次不做过细网格调参")
+        if total_score <= -2 and action != "暂停网格":
+            reasons.append("多层证据偏弱，买入侧按保守仓位执行")
+            suggested_buy_qty = _round_qty((suggested_buy_qty or current_qty) * 0.5)
+        elif total_score >= 2 and action == "暂停网格":
+            reasons.append("多层证据未完全转弱，暂停后仍保留卖出侧纪律并观察修复")
+
     if not reasons:
         reasons.append("缺少完整波动率或网格参数，建议先补齐数据")
     return {
@@ -67,6 +90,8 @@ def advise_grid(grid: GridConfig, market: MarketSnapshot, position: Position | N
         "suggested_buy_quantity": suggested_buy_qty if suggested_buy_qty is not None else None,
         "suggested_sell_quantity": suggested_sell_qty if suggested_sell_qty is not None else None,
         "reasons": reasons,
+        "layered_confidence": layer_payload.get("confidence") if layer_payload else None,
+        "layered_score": layer_payload.get("total_score") if layer_payload else None,
     }
 
 
@@ -87,3 +112,10 @@ def _round_qty(value: float) -> float:
     if value <= 0:
         return 0
     return max(100, round(value / 100) * 100)
+
+
+def _num_or_zero(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
