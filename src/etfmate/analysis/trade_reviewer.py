@@ -7,10 +7,10 @@ from etfmate.storage.models import Trade
 
 def review_trade_periods(trades: list[Trade], run_date: str) -> list[dict]:
     return [
-        _review_period("当日复盘", trades, run_date, 0),
-        _review_period("三日复盘", trades, run_date, 3),
-        _review_period("7日复盘", trades, run_date, 7),
-        _review_period("30日复盘", trades, run_date, 30),
+        _review_period("本次日内复盘", trades, run_date, 0),
+        _review_period("近3日复盘", trades, run_date, 3),
+        _review_period("近7日复盘", trades, run_date, 7),
+        _review_period("近30日复盘", trades, run_date, 30),
     ]
 
 

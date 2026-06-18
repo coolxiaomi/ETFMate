@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +13,8 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def date_str(value: str | None = None) -> str:
-    return value or date.today().isoformat()
+def run_id_str(value: str | None = None) -> str:
+    return value or datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
 def write_json(path: Path, payload: Any) -> Path:

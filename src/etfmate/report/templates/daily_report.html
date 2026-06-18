@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ETFMate 实时分析 {{ date }}</title>
+  <style>
+:root {
+  color-scheme: light;
+  --bg: #f5f7f8;
+  --panel: #ffffff;
+  --text: #162022;
+  --muted: #5d6b70;
+  --line: #d9e1e4;
+  --soft: #eef3f4;
+  --profit: #c01818;
+  --loss: #0f8a4b;
+  --warn: #b45309;
+  --danger: #b91c1c;
+  --blue: #2563eb;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+}
+.page {
+  width: min(1500px, calc(100% - 28px));
+  margin: 0 auto;
+  padding: 18px 0 34px;
+}
+.hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: end;
+  padding: 12px 0 14px;
+  border-bottom: 2px solid var(--text);
+}
+.eyebrow, .date, .empty, .title-meta { color: var(--muted); }
+.eyebrow { margin: 0 0 2px; font-weight: 700; letter-spacing: 0; }
+h1, h2, h3 { margin: 0; letter-spacing: 0; }
+h1 { font-size: 26px; line-height: 1.2; }
+h2 { font-size: 18px; margin-bottom: 10px; }
+h3 { font-size: 16px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.title-meta { font-size: 11px; font-weight: 500; }
+.summary { display: grid; grid-template-columns: repeat(2, 108px); gap: 8px; }
+.summary div { background: var(--panel); border: 1px solid var(--line); padding: 8px 10px; }
+.summary span { display: block; font-size: 22px; font-weight: 800; }
+.summary label { color: var(--muted); font-size: 12px; }
+.section { margin-top: 18px; }
+.etf-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.etf-nav a {
+  color: var(--text);
+  text-decoration: none;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.etf-nav a:hover { border-color: var(--blue); color: var(--blue); }
+.etf-list { display: grid; gap: 10px; }
+.etf-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+  scroll-margin-top: 12px;
+}
+.etf-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.badges { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+.pill {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.compact {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.table-block { min-width: 0; }
+.table-scroll { overflow-x: auto; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.dense th, .dense td {
+  border: 1px solid var(--line);
+  padding: 5px 6px;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+.dense thead th { background: var(--soft); font-weight: 800; white-space: nowrap; }
+.dense tbody th { width: 82px; background: #f7fafb; color: #314045; font-weight: 800; }
+.merged-cell { line-height: 1.55; }
+.inline-label { color: var(--muted); font-weight: 800; }
+.profit, .action-buy { color: var(--profit); font-weight: 800; }
+.loss, .action-sell { color: var(--loss); font-weight: 800; }
+.warn, .action-pause { color: var(--warn); font-weight: 800; }
+.danger { color: var(--danger); font-weight: 900; }
+.attention { color: var(--blue); font-weight: 800; }
+.neutral { color: var(--muted); font-weight: 700; }
+.strong { text-decoration: underline; text-underline-offset: 2px; }
+@media (max-width: 980px) {
+  .page { width: min(100% - 18px, 1500px); padding-top: 10px; }
+  .hero, .etf-title { display: block; }
+  .summary { grid-template-columns: repeat(2, 1fr); margin-top: 10px; }
+  .badges { justify-content: flex-start; margin-top: 6px; }
+  .compact { grid-template-columns: 1fr; }
+  h1 { font-size: 22px; }
+  h3 { display: block; }
+  .title-meta { display: block; margin-top: 2px; }
+}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">ETFMate</p>
+        <h1>实时 ETF 持仓与网格分析</h1>
+        <p class="date">{{ date }}</p>
+      </div>
+      <div class="summary">
+        <div><span>{{ recommendations_count }}</span><label>分析 ETF</label></div>
+        <div><span>{{ grid_advices_count }}</span><label>网格建议</label></div>
+      </div>
+    </header>
+
+    <section class="section">
+      <h2>ETF 持仓与网格建议</h2>
+      {% if etfs %}
+      <nav class="etf-nav" aria-label="ETF 快速导航">
+        {% for etf in etfs %}
+        <a href="#{{ etf.id }}">{{ etf.code }} {{ etf.name }}</a>
+        {% endfor %}
+      </nav>
+      <div class="etf-list">
+        {% for etf in etfs %}
+        <article class="etf-card" id="{{ etf.id }}">
+          <div class="etf-title">
+            <h3>{{ etf.code }} {{ etf.name }}<span class="title-meta">{{ etf.title_meta | safe }}</span></h3>
+            <div class="badges">{{ etf.action_pill | safe }}{{ etf.grid_pill | safe }}</div>
+          </div>
+          <div class="tables compact">
+            <section class="table-block">
+              {% if etf.holding.empty %}
+              <p class="empty">{{ etf.holding.message }}</p>
+              {% else %}
+              <div class="table-scroll">
+                <table class="dense">
+                  <thead><tr><th>项</th><th>当前</th><th>参考</th><th>提醒</th></tr></thead>
+                  <tbody>
+                    {% for row in etf.holding.rows %}
+                    {% if row.merged %}
+                    <tr><th>{{ row.label }}</th><td class="merged-cell" colspan="3">{{ row.content | safe }}</td></tr>
+                    {% else %}
+                    <tr><th>{{ row.label }}</th><td>{{ row.current | safe }}</td><td>{{ row.reference | safe }}</td><td>{{ row.alert | safe }}</td></tr>
+                    {% endif %}
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              {% endif %}
+            </section>
+
+            <section class="table-block">
+              {% if etf.grid.empty %}
+              <p class="empty">{{ etf.grid.message }}</p>
+              {% else %}
+              <div class="table-scroll">
+                <table class="dense">
+                  <thead><tr><th>项</th><th>当前</th><th>建议</th><th>提醒</th></tr></thead>
+                  <tbody>
+                    {% for row in etf.grid.rows %}
+                    {% if row.merged %}
+                    <tr><th>{{ row.label }}</th><td class="merged-cell" colspan="3">{{ row.content | safe }}</td></tr>
+                    {% else %}
+                    <tr><th>{{ row.label }}</th><td>{{ row.current | safe }}</td><td>{{ row.reference | safe }}</td><td>{{ row.alert | safe }}</td></tr>
+                    {% endif %}
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              {% endif %}
+            </section>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <section class="empty">暂无可分析 ETF，需先完成采集或导入 raw 数据。</section>
+      {% endif %}
+    </section>
+
+    <section class="section">
+      <h2>交易复盘</h2>
+      {% if trade_review.periods %}
+      <div class="table-scroll">
+        <table class="dense">
+          <thead><tr><th>周期</th><th>评分</th><th>笔数</th><th>买入</th><th>卖出</th><th>费</th><th>问题</th><th>计划</th></tr></thead>
+          <tbody>
+            {% for row in trade_review.periods %}
+            <tr>
+              <td>{{ row.period }}</td>
+              <td>{{ row.score }}</td>
+              <td>{{ row.trade_count }}</td>
+              <td>{{ row.buy_amount }}</td>
+              <td>{{ row.sell_amount }}</td>
+              <td>{{ row.fee }}</td>
+              <td>{{ row.problems }}</td>
+              <td>{{ row.plan }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="table-scroll">
+        <table class="dense">
+          <tbody>
+            {% for row in trade_review.summary %}
+            <tr><th>{{ row.label }}</th><td>{{ row.current | safe }}</td><td>{{ row.reference | safe }}</td><td>{{ row.alert | safe }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="section">
+      <h2>数据完整性</h2>
+      {% if data_completeness.empty %}
+      <p class="empty">数据完整性信息未提供。</p>
+      {% else %}
+      <div class="table-scroll">
+        <table class="dense">
+          <thead><tr><th>项目</th><th>数量</th><th>来源</th><th>备注</th></tr></thead>
+          <tbody>
+            {% for row in data_completeness.rows %}
+            <tr><td>{{ row.label }}</td><td>{{ row.count }}</td><td>{{ row.source }}</td><td>{{ row.note }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

@@ -3,7 +3,7 @@ from __future__ import annotations
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position
 
 
-def recommend(position: Position | None, grid: GridConfig | None, market: MarketSnapshot) -> dict:
+def recommend(position: Position | None, grid: GridConfig | None, market: MarketSnapshot, all_positions: list[Position] | None = None) -> dict:
     action = "持有"
     reasons: list[str] = []
     risks: list[str] = []
@@ -11,11 +11,13 @@ def recommend(position: Position | None, grid: GridConfig | None, market: Market
 
     boll_pos = _boll_position(market)
     bias6 = market.bias6 or 0
-    position_pct = position.pnl_pct if position else 0
     holding_weight = position.market_value if position else 0
+    portfolio_value = sum(item.market_value for item in (all_positions or []) if item.market_value > 0)
+    position_weight_pct = position.position_pct if position and position.position_pct is not None else (holding_weight / portfolio_value * 100 if portfolio_value else 0)
     above_ma20 = bool(market.ma20 and market.last_price >= market.ma20)
     above_ma60 = bool(market.ma60 and market.last_price >= market.ma60)
     vol_expanding = bool(market.vol_ma5 and market.vol_ma20 and market.vol_ma5 > market.vol_ma20 * 1.2)
+    vol_shrinking = bool(market.vol_ma5 and market.vol_ma20 and market.vol_ma5 < market.vol_ma20 * 0.75)
 
     if boll_pos is not None:
         scores.append(f"BOLL分位 {boll_pos:.0%}")
@@ -23,6 +25,8 @@ def recommend(position: Position | None, grid: GridConfig | None, market: Market
         scores.append(f"ATR14 {market.atr14_pct:.2f}%")
     if market.bias6 is not None:
         scores.append(f"BIAS6 {market.bias6:.2f}%")
+    if market.vol_ma5 and market.vol_ma20:
+        scores.append(f"VOL5/20 {market.vol_ma5 / market.vol_ma20:.2f}倍")
 
     if market.boll_lower and market.last_price <= market.boll_lower * 1.03 and bias6 < -3:
         action = "分批买入" if position else "买入"
@@ -45,10 +49,20 @@ def recommend(position: Position | None, grid: GridConfig | None, market: Market
 
     if vol_expanding:
         reasons.append("VOL MA5 高于 MA20，近期成交活跃度抬升")
-    elif market.vol_ma5 and market.vol_ma20 and market.vol_ma5 < market.vol_ma20 * 0.75:
+    elif vol_shrinking:
         risks.append("成交量低于近20日均量，反弹持续性需要验证")
 
     if position:
+        note_signal = _note_signal(position.note)
+        if note_signal == "positive" and above_ma20 and above_ma60 and not vol_shrinking:
+            reasons.append("你的备注偏看好，且趋势/量能暂未冲突，可作为持仓依据之一")
+        elif note_signal == "positive" and (not above_ma60 or vol_shrinking):
+            risks.append("你的备注偏看好，但市场趋势或量能没有确认，先降低加仓强度")
+        elif note_signal == "negative" and (not above_ma20 or not above_ma60):
+            reasons.append("你的备注偏谨慎，且市场信号偏弱，减仓或暂停买入侧更匹配")
+        elif note_signal == "negative" and above_ma20 and above_ma60:
+            risks.append("你的备注偏谨慎，但市场趋势偏强，卖出前需避免过早离场")
+
         if position.pnl_pct <= -10:
             risks.append("持仓浮亏超过 10%，加仓前先确认仓位上限")
         elif position.pnl_pct >= 25 and bias6 > 2:
@@ -57,25 +71,56 @@ def recommend(position: Position | None, grid: GridConfig | None, market: Market
                 action = "减仓"
         if holding_weight > 5000 and not above_ma20:
             risks.append("单只市值较高且短线弱于 MA20，避免继续集中补仓")
+        if position_weight_pct >= 8 and action in {"买入", "分批买入"}:
+            action = "持有"
+            risks.append("当前仓位占比已经偏高，即便低位也不建议继续扩大买入数量")
+
+    overlap_note = _overlap_note(position, all_positions or [])
+    if overlap_note:
+        risks.append(overlap_note)
 
     if market.data_quality != "ok":
         risks.append(f"行情数据完整性: {market.data_quality}")
 
+    action_quantity, position_plan = _action_plan(action, position, grid)
     return {
         "code": market.code,
         "name": market.name,
         "quantity": position.quantity if position else None,
         "market_value": position.market_value if position else None,
         "position_pct": position.position_pct if position else None,
+        "investor_note": position.note if position else None,
         "cost_price": position.cost_price if position else None,
         "last_price": market.last_price,
+        "pct_chg": market.pct_chg,
         "pnl_pct": position.pnl_pct if position else None,
         "boll_position_pct": round(boll_pos * 100, 1) if boll_pos is not None else None,
+        "boll_lower": market.boll_lower,
+        "boll_mid": market.boll_mid,
+        "boll_upper": market.boll_upper,
         "ma_status": _ma_status(market),
+        "ma5": market.ma5,
+        "ma10": market.ma10,
+        "ma20": market.ma20,
+        "ma60": market.ma60,
+        "ma200": market.ma200,
+        "atr7_pct": market.atr7_pct,
         "atr14_pct": market.atr14_pct,
+        "atr30_pct": market.atr30_pct,
+        "atr60_pct": market.atr60_pct,
         "bias6": market.bias6,
+        "bias12": market.bias12,
+        "bias24": market.bias24,
+        "volume": market.volume,
+        "vol_ma5": market.vol_ma5,
+        "vol_ma20": market.vol_ma20,
+        "vol_ratio": market.vol_ratio,
+        "turnover_pct": market.turnover_pct,
+        "amplitude_pct": market.amplitude_pct,
         "current_status": _status(position, grid, market),
         "action": action,
+        "action_quantity": action_quantity,
+        "position_plan": position_plan,
         "reasons": reasons,
         "risks": risks or ["暂无明显新增风险"],
         "watch_price": _watch_price(market),
@@ -93,22 +138,29 @@ def _status(position: Position | None, grid: GridConfig | None, market: MarketSn
 
 
 def _watch_price(market: MarketSnapshot) -> str:
-    prices = []
-    if market.boll_lower:
-        prices.append(f"BOLL 下轨 {market.boll_lower:.3f}")
-    if market.ma20:
-        prices.append(f"MA20 {market.ma20:.3f}")
-    if market.boll_upper:
-        prices.append(f"BOLL 上轨 {market.boll_upper:.3f}")
-    return " / ".join(prices) if prices else "等待补齐 K 线指标"
+    if not market.boll_lower or not market.boll_upper or not market.ma20:
+        return "等待补齐 K 线指标"
+    if market.last_price >= market.boll_upper:
+        return f"偏高：接近或高于 BOLL 上轨 {market.boll_upper:.3f}，优先看止盈/减仓"
+    if market.last_price <= market.boll_lower:
+        return f"偏低：接近或低于 BOLL 下轨 {market.boll_lower:.3f}，只适合小额分批观察"
+    if market.last_price < market.ma20:
+        return f"偏弱：先看能否重新站上 MA20 {market.ma20:.3f}"
+    return f"中性偏强：上方看 BOLL 上轨 {market.boll_upper:.3f}，跌破 MA20 {market.ma20:.3f} 转谨慎"
 
 
 def _ma_status(market: MarketSnapshot) -> str:
     states = []
+    if market.ma5:
+        states.append("上MA5" if market.last_price >= market.ma5 else "下MA5")
+    if market.ma10:
+        states.append("上MA10" if market.last_price >= market.ma10 else "下MA10")
     if market.ma20:
         states.append("上MA20" if market.last_price >= market.ma20 else "下MA20")
     if market.ma60:
         states.append("上MA60" if market.last_price >= market.ma60 else "下MA60")
+    if market.ma200:
+        states.append("上MA200" if market.last_price >= market.ma200 else "下MA200")
     return "/".join(states) if states else "均线不足"
 
 
@@ -116,3 +168,69 @@ def _boll_position(market: MarketSnapshot) -> float | None:
     if not market.boll_upper or not market.boll_lower or market.boll_upper == market.boll_lower:
         return None
     return (market.last_price - market.boll_lower) / (market.boll_upper - market.boll_lower)
+
+
+def _action_plan(action: str, position: Position | None, grid: GridConfig | None) -> tuple[float | None, str]:
+    quantity = position.quantity if position else None
+    grid_qty = grid.order_quantity if grid else None
+    if not position:
+        if action in {"买入", "分批买入"}:
+            return grid_qty or 100, "无当前持仓，只适合按单格小仓位试探"
+        return None, "无当前持仓"
+    if action in {"减仓", "卖出"}:
+        suggested = _round_lot(max(grid_qty or 0, quantity * (0.2 if action == "减仓" else 0.5)))
+        keep = max(0, quantity - suggested)
+        if action == "卖出":
+            return suggested, f"先卖出约 {suggested:g} 份；趋势未修复时可继续降仓，保留底仓 {min(keep, quantity * 0.2):g} 份以内"
+        return suggested, f"先减约 {suggested:g} 份，保留至少 {max(100, _round_lot(quantity * 0.5)):g} 份底仓继续观察"
+    if action in {"买入", "分批买入"}:
+        base = grid_qty or quantity * 0.2
+        cap = max(100, quantity * 0.5)
+        suggested = min(_round_lot(base), _round_lot(cap))
+        return suggested, f"参考加仓 {suggested:g} 份，分批执行，不一次打满"
+    if action == "暂停网格":
+        return 0, "暂停买入侧；已有持仓保留底仓，优先等趋势修复"
+    return None, "维持当前仓位，按网格纪律执行"
+
+
+def _round_lot(value: float) -> float:
+    if value <= 0:
+        return 0
+    return max(100, round(value / 100) * 100)
+
+
+def _note_signal(note: str | None) -> str:
+    text = (note or "").lower()
+    if any(word in text for word in ("看好", "长期", "低估", "配置", "加仓", "买入", "强")):
+        return "positive"
+    if any(word in text for word in ("谨慎", "不看好", "风险", "高估", "减仓", "卖出", "弱")):
+        return "negative"
+    return "neutral"
+
+
+def _overlap_note(position: Position | None, positions: list[Position]) -> str | None:
+    if not position:
+        return None
+    theme = _theme_key(position.name)
+    if not theme:
+        return None
+    peers = [item for item in positions if item.code != position.code and _theme_key(item.name) == theme]
+    if not peers:
+        return None
+    names = "、".join(f"{item.code} {item.name}" for item in peers[:3])
+    return f"可能与同主题 ETF 持仓重合较高：{names}；建议保留流动性/费率/跟踪误差更优的一只，另一只逐步降权或只保留观察仓"
+
+
+def _theme_key(name: str) -> str | None:
+    rules = {
+        "软件": ("软件", "云计算", "信创"),
+        "半导体": ("半导体", "芯片", "集成电路"),
+        "新能源": ("新能源", "电池", "储能", "光伏"),
+        "有色金属": ("有色", "稀有金属", "工业金属"),
+        "科创创业": ("科创创业", "双创"),
+        "港股医药": ("港股创新药", "创新药", "医药"),
+    }
+    for key, words in rules.items():
+        if any(word in name for word in words):
+            return key
+    return None

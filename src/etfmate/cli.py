@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +9,11 @@ from etfmate.analysis.grid_advisor import advise_grid
 from etfmate.analysis.recommendation import recommend
 from etfmate.analysis.trade_reviewer import review_trade_periods, review_trades
 from etfmate.browser import ths_account, touker_grid
+from etfmate.browser.session import ChromeNotReadyError, LoginRequiredError, require_cdp_url
 from etfmate.market.providers import build_market_snapshot, normalize_etf_code
 from etfmate.report.daily_report import write_report
 from etfmate.storage.models import GridConfig, Position, Trade
-from etfmate.storage.repository import date_str, write_json
-from etfmate.storage.repository import read_json
+from etfmate.storage.repository import read_json, run_id_str, write_json
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,89 +25,83 @@ def main(argv: list[str] | None = None) -> int:
     login.add_argument("site", choices=["ths", "touker"])
 
     collect = sub.add_parser("collect")
-    collect.add_argument("--date")
+    collect.add_argument("--run-id", help="实时运行编号，默认使用当前时间")
 
     analyze = sub.add_parser("analyze")
-    analyze.add_argument("--date")
-    analyze.add_argument("--codes", nargs="*", default=[], help="没有持仓文件时手工指定 ETF 代码")
+    analyze.add_argument("--run-id", required=True, help="要分析的实时运行编号")
 
     report = sub.add_parser("report")
-    report.add_argument("--date")
+    report.add_argument("--run-id", help="要生成报告的实时运行编号，默认使用最新一次分析")
 
-    daily = sub.add_parser("daily")
-    daily.add_argument("--date")
-    daily.add_argument("--codes", nargs="*", default=[], help="没有持仓文件时手工指定 ETF 代码")
+    run = sub.add_parser("run")
+    run.add_argument("--run-id", help="实时运行编号，默认使用当前时间")
 
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
-    run_date = date_str(getattr(args, "date", None))
 
-    if args.cmd == "login":
-        ths_account.login(root) if args.site == "ths" else touker_grid.login(root)
-        return 0
-    if args.cmd == "collect":
-        run_collect(root, run_date)
-        return 0
-    if args.cmd == "analyze":
-        run_analyze(root, run_date, args.codes)
-        return 0
-    if args.cmd == "report":
-        run_report(root, run_date)
-        return 0
-    if args.cmd == "daily":
-        run_collect(root, run_date)
-        run_analyze(root, run_date, args.codes)
-        run_report(root, run_date)
-        return 0
+    try:
+        if args.cmd == "login":
+            ths_account.login(root) if args.site == "ths" else touker_grid.login(root)
+            return 0
+        if args.cmd == "collect":
+            run_collect(root, run_id_str(args.run_id))
+            return 0
+        if args.cmd == "analyze":
+            run_analyze(root, args.run_id)
+            return 0
+        if args.cmd == "report":
+            run_report(root, args.run_id or latest_run_id(root))
+            return 0
+        if args.cmd == "run":
+            run_id = run_id_str(args.run_id)
+            require_cdp_url(root / "runtime/chrome-cdp-profile")
+            run_collect(root, run_id)
+            run_analyze(root, run_id)
+            run_report(root, run_id)
+            return 0
+    except (ChromeNotReadyError, LoginRequiredError, RuntimeError) as exc:
+        print(str(exc))
+        return 2
     return 1
 
 
-def run_collect(root: Path, run_date: str) -> None:
-    ths = ths_account.collect(root, root / "data/raw/ths" / run_date)
-    touker = touker_grid.collect(root, root / "data/raw/touker" / run_date)
-    write_json(root / "data/raw/ths" / run_date / "account.json", ths)
-    write_json(root / "data/raw/touker" / run_date / "grids.json", touker)
+def run_collect(root: Path, run_id: str) -> None:
+    ths = ths_account.collect(root, root / "data/raw/ths" / run_id)
+    _require_items(ths, "positions", "同花顺投资账本没有采集到持仓数据，已停止。请确认页面已登录且持仓表已加载。")
+    touker = touker_grid.collect(root, root / "data/raw/touker" / run_id)
+    _require_items(touker, "grids", "Touker 没有采集到网格数据，已停止。请确认监控中网格已加载完整。")
+    write_json(root / "data/raw/ths" / run_id / "account.json", ths)
+    write_json(root / "data/raw/touker" / run_id / "grids.json", touker)
+    print(f"已采集实时数据: {run_id}")
 
 
-def run_analyze(root: Path, run_date: str, extra_codes: list[str] | None = None) -> None:
-    account = _read_first_json(
-        root / "data/raw/ths" / run_date / "account.json",
-        root / "data/manual/account.json",
-        default={},
-    )
-    grid_payload = _read_first_json(
-        root / "data/raw/touker" / run_date / "grids.json",
-        root / "data/manual/grids.json",
-        default={},
-    )
+def run_analyze(root: Path, run_id: str) -> None:
+    account = read_json(root / "data/raw/ths" / run_id / "account.json", default={})
+    grid_payload = read_json(root / "data/raw/touker" / run_id / "grids.json", default={})
     positions = [_position(item) for item in _items(account, "positions")]
     trades = [_trade(item) for item in _items(account, "trades")]
     grids = [_grid(item) for item in _items(grid_payload, "grids")]
+    _require_items({"positions": positions}, "positions", "缺少同花顺持仓数据，不能生成实时分析。")
+    _require_items({"grids": grids}, "grids", "缺少 Touker 网格数据，不能生成实时分析。")
 
-    codes = sorted({
-        *[item.code for item in positions],
-        *[item.code for item in trades],
-        *[item.code for item in grids],
-        *[normalize_etf_code(code) for code in (extra_codes or [])],
-    })
-    if not codes:
-        print("未找到持仓/网格/交易 ETF。可在 data/manual/account.json 放入 positions，或运行 etfmate analyze --codes 510300。")
-
+    codes = sorted({*[item.code for item in positions], *[item.code for item in trades], *[item.code for item in grids]})
     snapshots = [build_market_snapshot(code) for code in codes]
     snapshots_by_code = {item.code: item for item in snapshots}
     positions_by_code = {item.code: item for item in positions}
     grids_by_code = {item.code: item for item in grids}
     recommendations = [
-        recommend(positions_by_code.get(item.code), grids_by_code.get(item.code), item)
+        recommend(positions_by_code.get(item.code), grids_by_code.get(item.code), item, all_positions=positions)
         for item in snapshots
     ]
     grid_advices = [
-        advise_grid(item, snapshots_by_code[item.code])
+        advise_grid(item, snapshots_by_code[item.code], positions_by_code.get(item.code))
         for item in grids
         if item.code in snapshots_by_code
     ]
+    run_date = _run_date(run_id)
     payload = {
-        "date": run_date,
+        "run_id": run_id,
+        "analysis_time": _analysis_time(run_id),
         "positions_count": len(positions),
         "grids_count": len(grids),
         "market_snapshots": snapshots,
@@ -115,127 +110,137 @@ def run_analyze(root: Path, run_date: str, extra_codes: list[str] | None = None)
         "trade_review": review_trades(trades),
         "trade_reviews": review_trade_periods(trades, run_date),
     }
-    write_json(root / "data/raw/market" / run_date / "snapshots.json", snapshots)
-    write_json(root / "data/raw/market" / run_date / "analysis.json", payload)
-    print(f"已生成分析结果: data/raw/market/{run_date}/analysis.json")
+    write_json(root / "data/raw/market" / run_id / "snapshots.json", snapshots)
+    write_json(root / "data/raw/market" / run_id / "analysis.json", payload)
+    print(f"已生成实时分析结果: data/raw/market/{run_id}/analysis.json")
 
 
-def run_report(root: Path, run_date: str) -> None:
-    analysis = read_json(root / "data/raw/market" / run_date / "analysis.json", default={})
-    account = _read_first_json(
-        root / "data/raw/ths" / run_date / "account.json",
-        root / "data/manual/account.json",
-        default={},
-    )
-    grid_payload = _read_first_json(
-        root / "data/raw/touker" / run_date / "grids.json",
-        root / "data/manual/grids.json",
-        default={},
-    )
+def run_report(root: Path, run_id: str) -> None:
+    analysis = read_json(root / "data/raw/market" / run_id / "analysis.json", default={})
+    if not analysis:
+        raise RuntimeError(f"未找到分析结果: data/raw/market/{run_id}/analysis.json")
+    account = read_json(root / "data/raw/ths" / run_id / "account.json", default={})
+    grid_payload = read_json(root / "data/raw/touker" / run_id / "grids.json", default={})
     recommendations = analysis.get("recommendations", [])
     grid_advices = analysis.get("grid_advices", [])
     review = analysis.get("trade_review") or review_trades([])
     if analysis.get("trade_reviews"):
         review = {**review, "periods": analysis["trade_reviews"]}
-    # Build data completeness
+
     positions_count = len(_items(account, "positions"))
     trades_count = len(_items(account, "trades"))
     grids_list = _items(grid_payload, "grids")
     grids_count = len(grids_list)
     grids_active = sum(1 for g in grids_list if _bool(_pick(g, "enabled", "启用", default=True)))
     snapshots = analysis.get("market_snapshots", [])
-    sources = set()
-    for s in snapshots:
-        dq = s.get("data_quality", "") if isinstance(s, dict) else ""
-        if dq:
-            sources.add(dq)
-    degraded = [s.get("data_quality", "") for s in snapshots if isinstance(s, dict) and "tencent" in s.get("data_quality", "")]
+    sources = {s.get("data_quality", "") for s in snapshots if isinstance(s, dict) and s.get("data_quality")}
     data_completeness = {
         "items": [
-            {"label": "同花顺持仓", "count": str(positions_count), "source": "THS 账户页", "note": "完整" if positions_count else "无数据"},
-            {"label": "同花顺交易记录", "count": f"{trades_count} 笔", "source": "THS 账户页", "note": "完整" if trades_count else "无数据"},
-            {"label": "Touker 网格", "count": f"{grids_count}（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker CDP", "note": "完整" if grids_count else "无数据"},
-            {"label": "行情/K 线", "count": f"{len(snapshots)} 只", "source": "; ".join(sources) or "N/A", "note": "降级到腾讯" if degraded else "完整"},
+            {"label": "同花顺持仓", "count": str(positions_count), "source": "同花顺投资账本", "note": "完整" if positions_count else "无数据"},
+            {"label": "同花顺交易记录", "count": f"{trades_count} 笔", "source": "同花顺投资账本", "note": "完整" if trades_count else "无数据"},
+            {"label": "Touker 网格", "count": f"{grids_count}（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker", "note": "完整" if grids_count else "无数据"},
+            {"label": "行情/K 线", "count": f"{len(snapshots)} 只", "source": "; ".join(sorted(sources)) or "N/A", "note": "由 a-stock-data/本地行情适配器决策"},
         ]
     }
-    out = write_report(root / "data/reports" / f"{run_date}-etf-review.md", run_date, recommendations, grid_advices, review, data_completeness)
-    print(f"已生成报告: {out}")
+    label = analysis.get("analysis_time") or _analysis_time(run_id)
+    out = write_report(root / "data/reports" / f"{run_id}-etf-realtime.html", label, recommendations, grid_advices, review, data_completeness)
+    print(f"已生成实时报告: {out}")
 
 
-def _read_first_json(*paths: Path, default: Any) -> Any:
-    for path in paths:
-        value = read_json(path, default=None)
-        if value is not None:
-            return value
-    return default
+def latest_run_id(root: Path) -> str:
+    market_root = root / "data/raw/market"
+    candidates = sorted(path.name for path in market_root.iterdir() if (path / "analysis.json").exists()) if market_root.exists() else []
+    if not candidates:
+        raise RuntimeError("未找到任何实时分析结果，请先运行 etfmate run。")
+    return candidates[-1]
 
 
-def _items(payload: Any, key: str) -> list[dict]:
+def _require_items(payload: Any, key: str, message: str) -> None:
+    if not _items(payload, key):
+        raise RuntimeError(message)
+
+
+def _run_date(run_id: str) -> str:
+    digits = "".join(ch for ch in run_id if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return datetime.now().date().isoformat()
+
+
+def _analysis_time(run_id: str) -> str:
+    digits = "".join(ch for ch in run_id if ch.isdigit())
+    if len(digits) >= 14:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}:{digits[12:14]}"
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _items(payload: Any, key: str) -> list:
     if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
+        return [item for item in payload if item]
     if isinstance(payload, dict):
         value = payload.get(key, [])
         if isinstance(value, dict):
             value = list(value.values())
-        return [item for item in value if isinstance(item, dict)]
+        return [item for item in value if item]
     return []
 
 
 def _position(raw: dict) -> Position:
-    code = normalize_etf_code(str(_pick(raw, "code", "symbol", "证券代码", "代码")))
+    code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "zqdm", "证券代码", "代码")))
     return Position(
         code=code,
         name=str(_pick(raw, "name", "证券名称", "名称", default=code)),
-        quantity=_num(_pick(raw, "quantity", "持仓数量", "持有数量", "股份余额", default=0)),
-        available_quantity=_num(_pick(raw, "available_quantity", "可用数量", "可卖数量", default=0)),
-        cost_price=_num(_pick(raw, "cost_price", "成本价", "成本", "持仓成本", default=0)),
-        last_price=_num(_pick(raw, "last_price", "现价", "最新价", default=0)),
-        market_value=_num(_pick(raw, "market_value", "市值", "持仓市值", default=0)),
-        pnl=_num(_pick(raw, "pnl", "盈亏", "浮动盈亏", "持仓盈亏", default=0)),
-        pnl_pct=_num(_pick(raw, "pnl_pct", "盈亏率", "收益率", "持仓收益率", default=0)),
+        quantity=_num(_pick(raw, "quantity", "amount", "holdAmount", "current_amount", "持仓数量", "持有数量", "股份余额", default=0)),
+        available_quantity=_num(_pick(raw, "available_quantity", "enableAmount", "availableAmount", "可用数量", "可卖数量", default=0)),
+        cost_price=_num(_pick(raw, "cost_price", "costPrice", "成本价", "成本", "持仓成本", default=0)),
+        last_price=_num(_pick(raw, "last_price", "lastPrice", "currentPrice", "现价", "最新价", default=0)),
+        market_value=_num(_pick(raw, "market_value", "marketValue", "参考市值", "市值", "持仓市值", default=0)),
+        pnl=_num(_pick(raw, "pnl", "profit", "floatProfit", "盈亏", "浮动盈亏", "持仓盈亏", default=0)),
+        pnl_pct=_num(_pick(raw, "pnl_pct", "profitRate", "incomeRate", "盈亏率", "收益率", "持仓收益率", default=0)),
         position_pct=_num(_pick(raw, "position_pct", "仓位占比", "仓位", default=0)),
+        note=_text(_pick(raw, "note", "remark", "remarks", "comment", "备注", "持仓备注", "看法", default="")),
     )
 
 
 def _trade(raw: dict) -> Trade:
-    code = normalize_etf_code(str(_pick(raw, "code", "symbol", "证券代码", "代码")))
+    code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "zqdm", "证券代码", "代码")))
     return Trade(
         trade_date=str(_pick(raw, "trade_date", "成交日期", "日期", default="")),
         trade_time=str(_pick(raw, "trade_time", "成交时间", "时间", default="")),
         code=code,
         name=str(_pick(raw, "name", "证券名称", "名称", default=code)),
         side=str(_pick(raw, "side", "买卖方向", "方向", default="")),
-        price=_num(_pick(raw, "price", "成交价", "价格", default=0)),
-        quantity=_num(_pick(raw, "quantity", "成交数量", "数量", default=0)),
-        amount=_num(_pick(raw, "amount", "成交金额", "金额", default=0)),
+        price=_num(_pick(raw, "price", "dealPrice", "成交价", "价格", default=0)),
+        quantity=_num(_pick(raw, "quantity", "dealAmount", "成交数量", "数量", default=0)),
+        amount=_num(_pick(raw, "amount", "dealBalance", "成交金额", "金额", default=0)),
         fee=_num(_pick(raw, "fee", "手续费", default=0)),
     )
 
 
 def _grid(raw: dict) -> GridConfig:
-    code = normalize_etf_code(str(_pick(raw, "code", "symbol", "证券代码", "代码")))
+    code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "securityCode", "证券代码", "代码")))
     return GridConfig(
         code=code,
         name=str(_pick(raw, "name", "证券名称", "名称", default=code)),
         enabled=_bool(_pick(raw, "enabled", "启用", "状态", default=True)),
         status=str(_pick(raw, "status", "状态", default="")),
-        base_price=_maybe_num(_pick(raw, "base_price", "基准价", default=None)),
-        last_price=_maybe_num(_pick(raw, "last_price", "现价", default=None)),
-        distance_from_base_pct=_maybe_num(_pick(raw, "distance_from_base_pct", "距基准", default=None)),
-        lower_price=_maybe_num(_pick(raw, "lower_price", "下边界", "下限", default=None)),
-        upper_price=_maybe_num(_pick(raw, "upper_price", "上边界", "上限", default=None)),
-        grid_step_pct=_maybe_num(_pick(raw, "grid_step_pct", "网格间距", "间距", default=None)),
-        grid_step_amount=_maybe_num(_pick(raw, "grid_step_amount", "每格份额", default=None)),
-        order_amount=_maybe_num(_pick(raw, "order_amount", "每格金额", default=None)),
-        order_quantity=_maybe_num(_pick(raw, "order_quantity", "委托股数", default=None)),
-        buy_quantity=_maybe_num(_pick(raw, "buy_quantity", "买入股数", default=None)),
-        sell_quantity=_maybe_num(_pick(raw, "sell_quantity", "卖出股数", default=None)),
-        sell_rise_pct=_maybe_num(_pick(raw, "sell_rise_pct", "卖出上升", default=None)),
-        sell_pullback_pct=_maybe_num(_pick(raw, "sell_pullback_pct", "卖出回落", default=None)),
-        buy_fall_pct=_maybe_num(_pick(raw, "buy_fall_pct", "买入下跌", default=None)),
-        buy_rebound_pct=_maybe_num(_pick(raw, "buy_rebound_pct", "买入反弹", default=None)),
-        min_base_quantity=_maybe_num(_pick(raw, "min_base_quantity", "最小底仓", default=None)),
-        max_position_quantity=_maybe_num(_pick(raw, "max_position_quantity", "最大持仓", default=None)),
+        base_price=_maybe_num(_pick(raw, "base_price", "basePrice", "基准价", default=None)),
+        last_price=_maybe_num(_pick(raw, "last_price", "lastPrice", "currentPrice", "现价", default=None)),
+        distance_from_base_pct=_maybe_num(_pick(raw, "distance_from_base_pct", "distanceFromBasePct", "距基准", default=None)),
+        lower_price=_maybe_num(_pick(raw, "lower_price", "lowerPrice", "下边界", "下限", default=None)),
+        upper_price=_maybe_num(_pick(raw, "upper_price", "upperPrice", "上边界", "上限", default=None)),
+        grid_step_pct=_maybe_num(_pick(raw, "grid_step_pct", "gridStepPct", "stepPct", "网格间距", "间距", default=None)),
+        grid_step_amount=_maybe_num(_pick(raw, "grid_step_amount", "gridStepAmount", "每格份额", default=None)),
+        order_amount=_maybe_num(_pick(raw, "order_amount", "orderAmount", "每格金额", default=None)),
+        order_quantity=_maybe_num(_pick(raw, "order_quantity", "orderQuantity", "entrustAmount", "委托股数", default=None)),
+        buy_quantity=_maybe_num(_pick(raw, "buy_quantity", "buyQuantity", "buyAmount", "买入股数", default=None)),
+        sell_quantity=_maybe_num(_pick(raw, "sell_quantity", "sellQuantity", "sellAmount", "卖出股数", default=None)),
+        sell_rise_pct=_maybe_num(_pick(raw, "sell_rise_pct", "sellRisePct", "riseRate", "卖出上升", default=None)),
+        sell_pullback_pct=_maybe_num(_pick(raw, "sell_pullback_pct", "sellPullbackPct", "pullbackRate", "卖出回落", default=None)),
+        buy_fall_pct=_maybe_num(_pick(raw, "buy_fall_pct", "buyFallPct", "fallRate", "买入下跌", default=None)),
+        buy_rebound_pct=_maybe_num(_pick(raw, "buy_rebound_pct", "buyReboundPct", "reboundRate", "买入反弹", default=None)),
+        min_base_quantity=_maybe_num(_pick(raw, "min_base_quantity", "minBaseQuantity", "最小底仓", default=None)),
+        max_position_quantity=_maybe_num(_pick(raw, "max_position_quantity", "maxPositionQuantity", "最大持仓", default=None)),
         last_trigger_time=str(_pick(raw, "last_trigger_time", "最近触发时间", default="")),
     )
 
@@ -245,6 +250,11 @@ def _pick(raw: dict, *names: str, default: Any = None) -> Any:
         if name in raw and raw[name] not in (None, ""):
             return raw[name]
     return default
+
+
+def _text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 def _num(value: Any) -> float:

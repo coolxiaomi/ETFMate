@@ -14,7 +14,7 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     low = out["low"].astype(float)
     volume = out["volume"].astype(float)
 
-    for window in (5, 10, 20, 60):
+    for window in (5, 10, 20, 60, 200):
         out[f"ma{window}"] = close.rolling(window).mean()
     out["vol_ma5"] = volume.rolling(5).mean()
     out["vol_ma20"] = volume.rolling(20).mean()
@@ -27,8 +27,9 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     prev_close = close.shift(1)
     tr = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
-    out["atr14"] = tr.rolling(14).mean()
-    out["atr14_pct"] = out["atr14"] / close * 100
+    for window in (7, 14, 30, 60):
+        out[f"atr{window}"] = tr.rolling(window).mean()
+        out[f"atr{window}_pct"] = out[f"atr{window}"] / close * 100
 
     for window in (6, 12, 24):
         ma = close.rolling(window).mean()

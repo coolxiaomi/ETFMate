@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from etfmate.storage.models import GridConfig, MarketSnapshot
+from etfmate.storage.models import GridConfig, MarketSnapshot, Position
 
 
-def advise_grid(grid: GridConfig, market: MarketSnapshot) -> dict:
+def advise_grid(grid: GridConfig, market: MarketSnapshot, position: Position | None = None) -> dict:
     reasons: list[str] = []
     action = "维持"
     current_step = grid.grid_step_pct or _avg(grid.buy_fall_pct, grid.sell_rise_pct)
@@ -32,9 +32,10 @@ def advise_grid(grid: GridConfig, market: MarketSnapshot) -> dict:
             reasons.append("当前网格间距与 ATR14 波动率基本匹配")
 
     if weak_trend and grid.enabled:
-        action = "暂停网格" if action == "维持" else action
-        reasons.append("价格低于 MA60，需要防止下跌趋势中机械补仓")
-        suggested_buy_qty = _round_qty(current_qty * 0.5)
+        action = "暂停网格"
+        reasons = [reason for reason in reasons if "网格间距" not in reason]
+        reasons.append("价格低于 MA60，先暂停买入侧，避免下跌趋势中机械补仓")
+        suggested_buy_qty = 0
         suggested_sell_qty = _round_qty(current_qty * 1.2)
         suggested_buy_fall = max(suggested_buy_fall, _round_pct((market.atr14_pct or suggested_buy_fall) * 1.1))
     elif strong_positive:
@@ -48,6 +49,10 @@ def advise_grid(grid: GridConfig, market: MarketSnapshot) -> dict:
         suggested_buy_fall = _round_pct(_clamp((market.atr14_pct or suggested_buy_fall) * 0.7, 2.0, suggested_buy_fall))
         reasons.append("价格接近 BOLL 下轨且短线负偏离，可保留买入侧但控制总仓位")
 
+    if position and position.quantity <= 200 and suggested_buy_qty and suggested_buy_qty > position.quantity:
+        suggested_buy_qty = _round_qty(position.quantity)
+        reasons.append("当前持仓很小，买入数量不应明显超过现有持仓，先用小份额验证")
+
     if not reasons:
         reasons.append("缺少完整波动率或网格参数，建议先补齐数据")
     return {
@@ -59,8 +64,8 @@ def advise_grid(grid: GridConfig, market: MarketSnapshot) -> dict:
         "current_sell_rise_pct": grid.sell_rise_pct,
         "suggested_sell_rise_pct": suggested_sell_rise,
         "current_quantity": current_qty or None,
-        "suggested_buy_quantity": suggested_buy_qty or None,
-        "suggested_sell_quantity": suggested_sell_qty or None,
+        "suggested_buy_quantity": suggested_buy_qty if suggested_buy_qty is not None else None,
+        "suggested_sell_quantity": suggested_sell_qty if suggested_sell_qty is not None else None,
         "reasons": reasons,
     }
 

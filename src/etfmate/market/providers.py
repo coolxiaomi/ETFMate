@@ -105,7 +105,7 @@ def baidu_daily_kline(code: str, start_time: str = "") -> pd.DataFrame:
     return df.dropna(subset=["open", "close", "high", "low", "volume"])
 
 
-def tencent_daily_kline(code: str, count: int = 160) -> pd.DataFrame:
+def tencent_daily_kline(code: str, count: int = 260) -> pd.DataFrame:
     code = normalize_etf_code(code)
     symbol = f"{market_prefix(code)}{code}"
     resp = requests.get(
@@ -160,15 +160,25 @@ def build_market_snapshot(code: str) -> MarketSnapshot:
         pct_chg=float(quote.get("pct_chg") or latest("ratio") or 0),
         volume=float(quote.get("volume") or latest("volume") or 0),
         amount=float(quote.get("amount") or latest("amount") or 0),
+        amplitude_pct=quote.get("amplitude_pct"),
+        turnover_pct=quote.get("turnover_pct"),
+        vol_ratio=quote.get("vol_ratio"),
         ma5=latest("ma5"),
         ma10=latest("ma10"),
         ma20=latest("ma20"),
         ma60=latest("ma60"),
+        ma200=latest("ma200"),
         boll_upper=latest("boll_upper"),
         boll_mid=latest("boll_mid"),
         boll_lower=latest("boll_lower"),
+        atr7=latest("atr7"),
+        atr7_pct=latest("atr7_pct"),
         atr14=latest("atr14"),
         atr14_pct=latest("atr14_pct"),
+        atr30=latest("atr30"),
+        atr30_pct=latest("atr30_pct"),
+        atr60=latest("atr60"),
+        atr60_pct=latest("atr60_pct"),
         bias6=latest("bias6"),
         bias12=latest("bias12"),
         bias24=latest("bias24"),

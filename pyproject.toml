@@ -23,3 +23,6 @@ etfmate = "etfmate.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+etfmate = ["report/templates/*.html"]

@@ -16,6 +16,7 @@ class Position:
     pnl: float
     pnl_pct: float
     position_pct: float | None = None
+    note: str | None = None
     source: str = "ths"
 
 
@@ -67,15 +68,25 @@ class MarketSnapshot:
     pct_chg: float
     volume: float
     amount: float
+    amplitude_pct: float | None = None
+    turnover_pct: float | None = None
+    vol_ratio: float | None = None
     ma5: float | None = None
     ma10: float | None = None
     ma20: float | None = None
     ma60: float | None = None
+    ma200: float | None = None
     boll_upper: float | None = None
     boll_mid: float | None = None
     boll_lower: float | None = None
+    atr7: float | None = None
+    atr7_pct: float | None = None
     atr14: float | None = None
     atr14_pct: float | None = None
+    atr30: float | None = None
+    atr30_pct: float | None = None
+    atr60: float | None = None
+    atr60_pct: float | None = None
     bias6: float | None = None
     bias12: float | None = None
     bias24: float | None = None

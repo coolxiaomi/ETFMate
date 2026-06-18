@@ -124,7 +124,7 @@ def to_dict(value: Any) -> Any:
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -136,8 +136,8 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def date_str(value: str | None = None) -> str:
-    return value or date.today().isoformat()
+def run_id_str(value: str | None = None) -> str:
+    return value or datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
 def write_json(path: Path, payload: Any) -> Path:
@@ -556,8 +556,8 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def render_markdown(date: str, recommendations: list[dict], grid_advices: list[dict], trade_review: dict) -> str:
-    lines = [f"# ETFMate 每日复盘 {date}", ""]
+def render_markdown(analysis_time: str, recommendations: list[dict], grid_advices: list[dict], trade_review: dict) -> str:
+    lines = [f"# ETFMate 实时分析 {analysis_time}", ""]
     lines.extend(["## 持仓与网格建议", ""])
     if not recommendations:
         lines.append("暂无可分析 ETF，需先完成采集或导入 raw 数据。")
@@ -582,7 +582,7 @@ def render_markdown(date: str, recommendations: list[dict], grid_advices: list[d
 
     lines.extend([
         "",
-        "## 当日交易复盘",
+        "## 交易复盘",
         "",
         f"今日评分：{trade_review['score']}/10",
         "优点：" + "；".join(trade_review["positives"]),
@@ -594,9 +594,9 @@ def render_markdown(date: str, recommendations: list[dict], grid_advices: list[d
     return "\n".join(lines)
 
 
-def write_report(path: Path, date: str, recommendations: list[dict], grid_advices: list[dict], trade_review: dict) -> Path:
+def write_report(path: Path, analysis_time: str, recommendations: list[dict], grid_advices: list[dict], trade_review: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_markdown(date, recommendations, grid_advices, trade_review), encoding="utf-8")
+    path.write_text(render_markdown(analysis_time, recommendations, grid_advices, trade_review), encoding="utf-8")
     return path
 ''',
     "src/etfmate/cli.py": r'''
@@ -608,7 +608,7 @@ from pathlib import Path
 from etfmate.analysis.trade_reviewer import review_trades
 from etfmate.browser import ths_account, touker_grid
 from etfmate.report.daily_report import write_report
-from etfmate.storage.repository import date_str, write_json
+from etfmate.storage.repository import run_id_str, write_json
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -620,62 +620,62 @@ def main(argv: list[str] | None = None) -> int:
     login.add_argument("site", choices=["ths", "touker"])
 
     collect = sub.add_parser("collect")
-    collect.add_argument("--date")
+    collect.add_argument("--run-id")
 
     analyze = sub.add_parser("analyze")
-    analyze.add_argument("--date")
+    analyze.add_argument("--run-id", required=True)
 
     report = sub.add_parser("report")
-    report.add_argument("--date")
+    report.add_argument("--run-id", required=True)
 
-    daily = sub.add_parser("daily")
-    daily.add_argument("--date")
+    run = sub.add_parser("run")
+    run.add_argument("--run-id")
 
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
-    run_date = date_str(getattr(args, "date", None))
+    run_id = run_id_str(getattr(args, "run_id", None))
 
     if args.cmd == "login":
         ths_account.login(root) if args.site == "ths" else touker_grid.login(root)
         return 0
     if args.cmd == "collect":
-        run_collect(root, run_date)
+        run_collect(root, run_id)
         return 0
     if args.cmd == "analyze":
-        run_analyze(root, run_date)
+        run_analyze(root, args.run_id)
         return 0
     if args.cmd == "report":
-        run_report(root, run_date)
+        run_report(root, args.run_id)
         return 0
-    if args.cmd == "daily":
-        run_collect(root, run_date)
-        run_analyze(root, run_date)
-        run_report(root, run_date)
+    if args.cmd == "run":
+        run_collect(root, run_id)
+        run_analyze(root, run_id)
+        run_report(root, run_id)
         return 0
     return 1
 
 
-def run_collect(root: Path, run_date: str) -> None:
-    ths = ths_account.collect(root, root / "data/raw/ths" / run_date)
-    touker = touker_grid.collect(root, root / "data/raw/touker" / run_date)
-    write_json(root / "data/raw/ths" / run_date / "account.json", ths)
-    write_json(root / "data/raw/touker" / run_date / "grids.json", touker)
+def run_collect(root: Path, run_id: str) -> None:
+    ths = ths_account.collect(root, root / "data/raw/ths" / run_id)
+    touker = touker_grid.collect(root, root / "data/raw/touker" / run_id)
+    write_json(root / "data/raw/ths" / run_id / "account.json", ths)
+    write_json(root / "data/raw/touker" / run_id / "grids.json", touker)
 
 
-def run_analyze(root: Path, run_date: str) -> None:
+def run_analyze(root: Path, run_id: str) -> None:
     payload = {
-        "date": run_date,
+        "run_id": run_id,
         "recommendations": [],
         "grid_advices": [],
         "trade_review": review_trades([]),
     }
-    write_json(root / "data/raw/market" / run_date / "analysis.json", payload)
-    print(f"已生成分析占位结果: data/raw/market/{run_date}/analysis.json")
+    write_json(root / "data/raw/market" / run_id / "analysis.json", payload)
+    print(f"已生成实时分析占位结果: data/raw/market/{run_id}/analysis.json")
 
 
-def run_report(root: Path, run_date: str) -> None:
+def run_report(root: Path, run_id: str) -> None:
     review = review_trades([])
-    out = write_report(root / "data/reports" / f"{run_date}-etf-review.md", run_date, [], [], review)
+    out = write_report(root / "data/reports" / f"{run_id}-etf-realtime.md", run_id, [], [], review)
     print(f"已生成报告: {out}")
 
 
