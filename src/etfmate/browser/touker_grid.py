@@ -17,13 +17,13 @@ def touker_login_check(page) -> bool:
 
 
 def login(root: Path) -> None:
-    with BrowserSession(root / "runtime/playwright-profile/touker", mobile=True) as session:
+    with BrowserSession(root, mobile=True) as session:
         ensure_login(session.page(), TOUKER_URL, touker_login_check, "请在打开的移动端浏览器窗口中完成 Touker 登录。")
 
 
 def collect(root: Path, out_dir: Path) -> dict:
     captures: list[dict] = []
-    with BrowserSession(root / "runtime/playwright-profile/touker", mobile=True) as session:
+    with BrowserSession(root, mobile=True) as session:
         page = session.page()
         page.on("response", lambda r: captures.append({"url": r.url, "status": r.status}) if "json" in (r.headers.get("content-type", "")) else None)
         ensure_login(page, TOUKER_URL, touker_login_check, "请在打开的移动端浏览器窗口中完成 Touker 登录。")

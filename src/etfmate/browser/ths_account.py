@@ -17,7 +17,7 @@ def ths_login_check(page) -> bool:
 
 
 def login(root: Path) -> None:
-    with BrowserSession(root / "runtime/playwright-profile/ths") as session:
+    with BrowserSession(root) as session:
         ensure_login(
             session.page(),
             THS_URL,
@@ -28,7 +28,7 @@ def login(root: Path) -> None:
 
 def collect(root: Path, out_dir: Path) -> dict:
     captures: list[dict] = []
-    with BrowserSession(root / "runtime/playwright-profile/ths") as session:
+    with BrowserSession(root) as session:
         page = session.page()
         page.on("response", lambda r: captures.append({"url": r.url, "status": r.status}) if "json" in (r.headers.get("content-type", "")) else None)
         ensure_login(page, THS_URL, ths_login_check, "请在打开的浏览器窗口中完成同花顺登录。")

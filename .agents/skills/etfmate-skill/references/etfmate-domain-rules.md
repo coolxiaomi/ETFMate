@@ -101,8 +101,10 @@ Touker 网格页：
 
 ## 报告格式
 
-- 持仓建议、网格建议、周期复盘均使用 Markdown 表格。
-- 表格列名保持短而明确，避免大段散文堆叠。
+- 不强制所有内容使用 Markdown 表格。表格只用于稳定数值和横向比较；长理由、风险点、复盘问题、下一步计划优先使用短段落或项目符号。
+- 持仓建议可以按单只 ETF 小节输出，先给关键指标短行，再给“建议动作 / 理由 / 风险 / 观察价位”。ETF 数量很多时，可先用紧凑表格汇总代码、仓位、盈亏、指标、动作，再在表后补充重点标的。
+- 网格建议必须保留可执行数值：当前买入/卖出触发、建议买入/卖出触发范围、当前委托股数、建议买入/卖出股数、是否暂停买入侧或卖出侧。可用表格，也可按 ETF 小节列出。
+- 周期复盘可以用表格汇总评分、笔数、买入金额、卖出金额、手续费；优点、问题、改进动作和计划不要硬塞进宽表。
 - 报告末尾列出数据完整性：同花顺持仓数量、交易记录数量、Touker 网格数量、行情/K 线来源、缺失或降级接口。
 - 报告生成后询问是否使用 `$shareone` 发布。用户同意后再执行 shareone skill 的安全确认和发布流程，标题格式为 `ETFMate-report-YYYY年MM月DD日`。
 
@@ -118,7 +120,7 @@ data/raw/touker/YYYY-MM-DD/grids.json
 data/raw/market/YYYY-MM-DD/snapshots.json
 data/reports/YYYY-MM-DD-etf-review.md
 data/reports/YYYY-MM-DD-etf-review.html
-runtime/playwright-profile/
+runtime/chrome-cdp-profile/
 ```
 
 `runtime/`、`data/raw/`、`data/reports/*.html`、`.env` 不应提交 Git。
