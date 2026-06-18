@@ -23,10 +23,20 @@ def recommend(
     holding_weight = position.market_value if position else 0
     portfolio_value = sum(item.market_value for item in (all_positions or []) if item.market_value > 0)
     position_weight_pct = position.position_pct if position and position.position_pct is not None else (holding_weight / portfolio_value * 100 if portfolio_value else 0)
+    position_tier = _position_tier(position_weight_pct)
     above_ma20 = bool(market.ma20 and market.last_price >= market.ma20)
     above_ma60 = bool(market.ma60 and market.last_price >= market.ma60)
     vol_expanding = bool(market.vol_ma5 and market.vol_ma20 and market.vol_ma5 > market.vol_ma20 * 1.2)
     vol_shrinking = bool(market.vol_ma5 and market.vol_ma20 and market.vol_ma5 < market.vol_ma20 * 0.75)
+    very_small_holding = bool(position and (position.quantity <= 200 or position_weight_pct <= 0.5))
+    low_weight = bool(position and position_weight_pct < 2)
+    high_weight = bool(position and position_weight_pct >= 5)
+    very_high_weight = bool(position and position_weight_pct >= 8)
+    low_zone = bool(boll_pos is not None and boll_pos <= 0.25) or bias6 <= -3
+    high_zone = bool(boll_pos is not None and boll_pos >= 0.9) or bias6 >= 5
+    overheat = bool(boll_pos is not None and boll_pos >= 0.98) or bias6 >= 6
+    hard_weak = bool(market.ma20 and market.ma60 and market.last_price < market.ma20 and market.last_price < market.ma60)
+    soft_weak = bool(market.ma60 and market.last_price < market.ma60)
 
     if boll_pos is not None:
         scores.append(f"BOLL分位 {boll_pos:.0%}")
@@ -37,17 +47,38 @@ def recommend(
     if market.vol_ma5 and market.vol_ma20:
         scores.append(f"VOL5/20 {market.vol_ma5 / market.vol_ma20:.2f}倍")
 
-    if market.boll_lower and market.last_price <= market.boll_lower * 1.03 and bias6 < -3:
-        action = "分批买入" if position else "买入"
-        reasons.append("价格接近 BOLL 下轨且 BIAS6 明显负偏离")
-    elif market.boll_upper and market.last_price >= market.boll_upper * 0.98 and bias6 > 3:
-        action = "减仓"
-        reasons.append("价格接近 BOLL 上轨且短线正偏离较大")
-    elif market.ma60 and market.last_price < market.ma60:
-        action = "暂停网格" if grid and grid.enabled else "持有"
-        risks.append("价格低于 MA60，下跌趋势中机械补仓风险上升")
+    if not position:
+        if low_zone and not hard_weak:
+            action = "买入"
+            reasons.append("无当前持仓且价格进入低位区，可按单格小仓位试探")
+        else:
+            reasons.append("无当前持仓，等待更明确的低位或趋势修复信号")
+    elif very_small_holding:
+        if low_zone and not hard_weak:
+            action = "分批加仓"
+            reasons.append("仓位极低且价格处于低位区，可小额补到观察仓")
+        elif overheat:
+            action = "持有"
+            reasons.append("仓位极低，即使短线过热也不建议为了止盈把观察仓减到 0")
+        elif hard_weak:
+            action = "持有"
+            risks.append("仓位极低且趋势偏弱，先观察，不扩大买入侧")
+        else:
+            reasons.append("仓位极低，当前以观察和保留网格纪律为主")
+    elif low_zone and not hard_weak and not high_weight:
+        action = "分批加仓"
+        reasons.append("仓位不高且价格进入低位区，可小额分批加仓")
+    elif (overheat or (high_zone and high_weight)) and (position.pnl_pct > 0 or high_weight):
+        action = "减仓" if not very_small_holding else "持有"
+        reasons.append("价格处于高位区且短线偏离较大，适合用网格或小比例兑现")
+    elif hard_weak and (high_weight or position.pnl_pct <= -8):
+        action = "暂停买入侧" if grid and grid.enabled else "持有"
+        risks.append("价格同时低于 MA20/MA60，且仓位或亏损压力不低，先暂停新增买入")
+    elif soft_weak and high_weight:
+        action = "暂停买入侧" if grid and grid.enabled else "持有"
+        risks.append("价格低于 MA60 且仓位偏高，买入侧先降速")
     else:
-        reasons.append("趋势和波动暂未触发强动作信号")
+        reasons.append("仓位、趋势和波动暂未触发强动作信号")
 
     if above_ma20 and above_ma60:
         reasons.append("价格同时站上 MA20/MA60，趋势结构偏强")
@@ -73,16 +104,22 @@ def recommend(
             risks.append("你的备注偏谨慎，但市场趋势偏强，卖出前需避免过早离场")
 
         if position.pnl_pct <= -10:
-            risks.append("持仓浮亏超过 10%，加仓前先确认仓位上限")
+            risks.append("持仓浮亏超过 10%，加仓前先确认仓位上限和趋势修复")
         elif position.pnl_pct >= 25 and bias6 > 2:
-            reasons.append("已有较高浮盈且短线偏离为正，可考虑网格止盈或小幅减仓")
-            if action == "持有":
+            if very_small_holding:
+                risks.append("观察仓已有高浮盈，不扩大买入，也不为了止盈减到 0")
+            else:
+                reasons.append("已有较高浮盈且短线偏离为正，可考虑网格止盈或小幅减仓")
+            if action == "持有" and not very_small_holding:
                 action = "减仓"
         if holding_weight > 5000 and not above_ma20:
             risks.append("单只市值较高且短线弱于 MA20，避免继续集中补仓")
-        if position_weight_pct >= 8 and action in {"买入", "分批买入"}:
+        if very_high_weight and action in {"买入", "分批买入", "分批加仓"}:
             action = "持有"
             risks.append("当前仓位占比已经偏高，即便低位也不建议继续扩大买入数量")
+        if high_zone and very_small_holding and action == "减仓":
+            action = "持有"
+            risks.append("当前只是观察仓，不建议把小仓位减到 0")
 
     overlap_note = _overlap_note(position, all_positions or [])
     if overlap_note:
@@ -98,22 +135,23 @@ def recommend(
         if confidence < 45 and action in {"买入", "卖出"}:
             action = "分批买入" if action == "买入" else "减仓"
             risks.append("七层证据置信度不足，强动作降级为分批或部分处理")
-        elif confidence < 45 and action == "分批买入":
+        elif confidence < 45 and action in {"分批买入", "分批加仓"}:
             risks.append("七层证据置信度不足，只适合小额试探，不适合扩大仓位")
-        if total_score <= -2 and action in {"买入", "分批买入"}:
+        if total_score <= -2 and action in {"买入", "分批买入", "分批加仓"}:
             action = "持有"
             risks.append("多层证据偏弱，暂不把低位信号直接解释为加仓信号")
         elif total_score >= 2 and action == "减仓" and position and position.pnl_pct < 0:
             risks.append("多层证据未明显转弱，亏损仓位不宜一次性大幅减仓")
-        reasons.append(str(layer_payload.get("summary") or "七层证据已纳入"))
 
     action_quantity, position_plan = _action_plan(action, position, grid)
+    reasons = _clean_reasons_for_action(action, reasons)
     return {
         "code": market.code,
         "name": market.name,
         "quantity": position.quantity if position else None,
         "market_value": position.market_value if position else None,
         "position_pct": position.position_pct if position else None,
+        "position_tier": position_tier,
         "investor_note": position.note if position else None,
         "cost_price": position.cost_price if position else None,
         "last_price": market.last_price,
@@ -165,6 +203,25 @@ def _status(position: Position | None, grid: GridConfig | None, market: MarketSn
     return "；".join(parts)
 
 
+def _position_tier(position_weight_pct: float | None) -> str:
+    value = position_weight_pct or 0
+    if value <= 0.5:
+        return "观察仓"
+    if value < 2:
+        return "低仓位"
+    if value < 5:
+        return "中等仓位"
+    if value < 8:
+        return "偏高仓位"
+    return "高仓位"
+
+
+def _clean_reasons_for_action(action: str, reasons: list[str]) -> list[str]:
+    if action == "持有":
+        return reasons
+    return [reason for reason in reasons if "暂未触发强动作信号" not in reason]
+
+
 def _watch_price(market: MarketSnapshot) -> str:
     if not market.boll_lower or not market.boll_upper or not market.ma20:
         return "等待补齐 K 线指标"
@@ -206,17 +263,21 @@ def _action_plan(action: str, position: Position | None, grid: GridConfig | None
             return grid_qty or 100, "无当前持仓，只适合按单格小仓位试探"
         return None, "无当前持仓"
     if action in {"减仓", "卖出"}:
-        suggested = _round_lot(max(grid_qty or 0, quantity * (0.2 if action == "减仓" else 0.5)))
+        if action == "减仓":
+            target = min(grid_qty or quantity * 0.2, quantity * 0.5)
+        else:
+            target = min(grid_qty or quantity * 0.5, quantity)
+        suggested = min(quantity, _round_lot(target))
         keep = max(0, quantity - suggested)
         if action == "卖出":
             return suggested, f"先卖出约 {suggested:g} 份；趋势未修复时可继续降仓，保留底仓 {min(keep, quantity * 0.2):g} 份以内"
-        return suggested, f"先减约 {suggested:g} 份，保留至少 {max(100, _round_lot(quantity * 0.5)):g} 份底仓继续观察"
-    if action in {"买入", "分批买入"}:
+        return suggested, f"先减约 {suggested:g} 份，剩余约 {keep:g} 份作为底仓继续观察"
+    if action in {"买入", "分批买入", "分批加仓"}:
         base = grid_qty or quantity * 0.2
-        cap = max(100, quantity * 0.5)
+        cap = max(100, quantity * (0.5 if action == "分批加仓" else 0.3))
         suggested = min(_round_lot(base), _round_lot(cap))
         return suggested, f"参考加仓 {suggested:g} 份，分批执行，不一次打满"
-    if action == "暂停网格":
+    if action in {"暂停网格", "暂停买入侧"}:
         return 0, "暂停买入侧；已有持仓保留底仓，优先等趋势修复"
     return None, "维持当前仓位，按网格纪律执行"
 

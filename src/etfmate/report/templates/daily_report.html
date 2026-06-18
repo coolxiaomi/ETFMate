@@ -96,11 +96,6 @@ h3 { font-size: 16px; display: flex; gap: 8px; align-items: baseline; flex-wrap:
   font-size: 12px;
   font-weight: 700;
 }
-.compact {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  gap: 10px;
-}
 .table-block { min-width: 0; }
 .table-scroll { overflow-x: auto; }
 table {
@@ -119,6 +114,14 @@ table {
 .dense thead th { background: var(--soft); font-weight: 800; white-space: nowrap; }
 .dense tbody th { width: 82px; background: #f7fafb; color: #314045; font-weight: 800; }
 .merged-cell { line-height: 1.55; }
+.embedded-scroll { margin: 2px 0; }
+.embedded-grid {
+  margin: 0;
+  border-color: #cbd5d9;
+  background: #fbfdfd;
+}
+.embedded-grid thead th { background: #e8eef0; }
+.embedded-grid tbody th { width: 92px; background: #f2f6f7; }
 .inline-label { color: var(--muted); font-weight: 800; }
 .profit, .action-buy { color: var(--profit); font-weight: 800; }
 .loss, .action-sell { color: var(--loss); font-weight: 800; }
@@ -132,7 +135,6 @@ table {
   .hero, .etf-title { display: block; }
   .summary { grid-template-columns: repeat(2, 1fr); margin-top: 10px; }
   .badges { justify-content: flex-start; margin-top: 6px; }
-  .compact { grid-template-columns: 1fr; }
   h1 { font-size: 22px; }
   h3 { display: block; }
   .title-meta { display: block; margin-top: 2px; }
@@ -168,49 +170,26 @@ table {
             <h3>{{ etf.code }} {{ etf.name }}<span class="title-meta">{{ etf.title_meta | safe }}</span></h3>
             <div class="badges">{{ etf.action_pill | safe }}{{ etf.grid_pill | safe }}</div>
           </div>
-          <div class="tables compact">
-            <section class="table-block">
-              {% if etf.holding.empty %}
-              <p class="empty">{{ etf.holding.message }}</p>
-              {% else %}
-              <div class="table-scroll">
-                <table class="dense">
-                  <thead><tr><th>项</th><th>当前</th><th>参考</th><th>提醒</th></tr></thead>
-                  <tbody>
-                    {% for row in etf.holding.rows %}
-                    {% if row.merged %}
-                    <tr><th>{{ row.label }}</th><td class="merged-cell" colspan="3">{{ row.content | safe }}</td></tr>
-                    {% else %}
-                    <tr><th>{{ row.label }}</th><td>{{ row.current | safe }}</td><td>{{ row.reference | safe }}</td><td>{{ row.alert | safe }}</td></tr>
-                    {% endif %}
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
-              {% endif %}
-            </section>
-
-            <section class="table-block">
-              {% if etf.grid.empty %}
-              <p class="empty">{{ etf.grid.message }}</p>
-              {% else %}
-              <div class="table-scroll">
-                <table class="dense">
-                  <thead><tr><th>项</th><th>当前</th><th>建议</th><th>提醒</th></tr></thead>
-                  <tbody>
-                    {% for row in etf.grid.rows %}
-                    {% if row.merged %}
-                    <tr><th>{{ row.label }}</th><td class="merged-cell" colspan="3">{{ row.content | safe }}</td></tr>
-                    {% else %}
-                    <tr><th>{{ row.label }}</th><td>{{ row.current | safe }}</td><td>{{ row.reference | safe }}</td><td>{{ row.alert | safe }}</td></tr>
-                    {% endif %}
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
-              {% endif %}
-            </section>
-          </div>
+          <section class="table-block">
+            {% if etf.holding.empty %}
+            <p class="empty">{{ etf.holding.message }}</p>
+            {% else %}
+            <div class="table-scroll">
+              <table class="dense">
+                <thead><tr><th>项</th><th>当前</th><th>参考</th><th>提醒</th></tr></thead>
+                <tbody>
+                  {% for row in etf.holding.rows %}
+                  {% if row.merged %}
+                  <tr><th>{{ row.label }}</th><td class="merged-cell" colspan="3">{{ row.content | safe }}</td></tr>
+                  {% else %}
+                  <tr><th>{{ row.label }}</th><td>{{ row.current | safe }}</td><td>{{ row.reference | safe }}</td><td>{{ row.alert | safe }}</td></tr>
+                  {% endif %}
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% endif %}
+          </section>
         </article>
         {% endfor %}
       </div>

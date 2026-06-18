@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -31,13 +32,19 @@ def login(root: Path) -> None:
 def collect(root: Path, out_dir: Path) -> dict:
     with WebAccessSession(root) as session:
         require_login(session, THS_URL, ths_login_check, "同花顺投资账本未登录或登录验证未完成，请在 Chrome 中手动登录后重新运行。")
-        snapshot = _as_dict(session.eval(_SNAPSHOT_JS))
         out_dir.mkdir(parents=True, exist_ok=True)
+        session.screenshot(out_dir / "account_preload.png")
+        time.sleep(2)
+        snapshot = _wait_for_positions_snapshot(session)
+        if not _position_records_from_text(str(snapshot.get("text", ""))):
+            time.sleep(2)
+        snapshot = _as_dict(session.eval(_SNAPSHOT_JS))
         (out_dir / "account_snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         (out_dir / "account_text.txt").write_text(str(snapshot.get("text", "")), encoding="utf-8")
         session.screenshot(out_dir / "account.png")
 
-    records = _records_from_snapshot(snapshot)
+    records = _position_records_from_text(str(snapshot.get("text", "")))
+    records.extend(_records_from_snapshot(snapshot))
     positions = _dedupe(_extract_records(records, _looks_like_position), "code", "证券代码", "symbol", "名称")
     trades = _dedupe(
         _extract_records(records, _looks_like_trade),
@@ -56,6 +63,17 @@ def collect(root: Path, out_dir: Path) -> dict:
     return {"positions": positions, "trades": trades, "closed_positions": [], "snapshot": snapshot}
 
 
+def _wait_for_positions_snapshot(session: WebAccessSession, timeout_seconds: int = 30) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    latest: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        latest = _as_dict(session.eval(_SNAPSHOT_JS))
+        if _position_records_from_text(str(latest.get("text", ""))):
+            return latest
+        time.sleep(1)
+    return latest
+
+
 def _records_from_snapshot(snapshot: dict[str, Any]) -> list[dict]:
     records: list[dict] = []
     for table in snapshot.get("tables") or []:
@@ -65,11 +83,55 @@ def _records_from_snapshot(snapshot: dict[str, Any]) -> list[dict]:
                 continue
             record = {headers[idx] if idx < len(headers) and headers[idx] else f"col_{idx}": value for idx, value in enumerate(row)}
             records.append(record)
+    for row_text in snapshot.get("virtualRows") or []:
+        records.extend(_position_records_from_text(str(row_text)))
     for value in (snapshot.get("localStorage") or {}).values():
         records.extend(_json_records(value))
     for value in (snapshot.get("sessionStorage") or {}).values():
         records.extend(_json_records(value))
     return records
+
+
+def _position_records_from_text(text: str) -> list[dict]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    records: list[dict] = []
+    for idx, line in enumerate(lines):
+        if not _is_code(line):
+            continue
+        next_idx = next((pos for pos in range(idx + 1, len(lines)) if _is_code(lines[pos]) or lines[pos] == "汇总"), len(lines))
+        window = lines[idx:next_idx]
+        if len(window) < 19:
+            continue
+        day_unit_offset = 1 if len(window) > 15 and window[15] == "天" else 0
+        latest_pct_idx = 15 + day_unit_offset
+        note_idx = latest_pct_idx + 8
+        note = window[note_idx] if len(window) > note_idx else ""
+        if _is_empty_note(note):
+            note = ""
+        records.append(
+            {
+                "code": window[0],
+                "name": window[1] if len(window) > 1 else window[0],
+                "market_value": window[2] if len(window) > 2 else 0,
+                "daily_pnl": window[3] if len(window) > 3 else 0,
+                "daily_pnl_pct": window[4] if len(window) > 4 else 0,
+                "pnl": window[5] if len(window) > 5 else 0,
+                "pnl_pct": window[6] if len(window) > 6 else 0,
+                "position_pct": window[12] if len(window) > 12 else 0,
+                "quantity": window[13] if len(window) > 13 else 0,
+                "holding_days": window[14] if len(window) > 14 else 0,
+                "last_price": window[latest_pct_idx + 1] if len(window) > latest_pct_idx + 1 else 0,
+                "cost_price": window[latest_pct_idx + 2] if len(window) > latest_pct_idx + 2 else 0,
+                "note": note,
+                "raw_text": "\n".join(window),
+            }
+        )
+    return records
+
+
+def _is_empty_note(value: str) -> bool:
+    text = str(value or "").strip()
+    return not text or text == "--" or bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?%?", text))
 
 
 def _json_records(value: Any) -> list[dict]:
@@ -160,11 +222,16 @@ _SNAPSHOT_JS = r"""
     const key = source.key(i);
     return [key, source.getItem(key)];
   }).filter(([key]) => key));
+  const virtualRows = Array.from(document.querySelectorAll("div,section,li,[role='row']"))
+    .map((el) => el.innerText ? el.innerText.trim() : "")
+    .filter((value) => /(^|\n)(?:sh|sz)?\d{6}(\n|$)/i.test(value))
+    .slice(0, 500);
   return JSON.stringify({
     url: location.href,
     title: document.title,
     text,
     tables,
+    virtualRows,
     localStorage: storage(localStorage),
     sessionStorage: storage(sessionStorage),
   });

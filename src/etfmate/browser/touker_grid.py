@@ -64,9 +64,61 @@ def _grid_records_from_text(text: str) -> list[dict]:
         match = re.search(r"(?<!\d)(?:sh|sz)?(\d{6})(?!\d)", line, flags=re.I)
         if not match:
             continue
-        window = lines[max(0, idx - 4) : idx + 20]
-        records.append({"code": match.group(1), "name": line, "status": " ".join(window), "raw_text": "\n".join(window)})
+        start = max(0, idx - 1)
+        end = next((pos for pos in range(idx + 1, len(lines)) if lines[pos].startswith("截止日期")), len(lines))
+        window = lines[start:end]
+        block = "\n".join(window)
+        name = _previous_name(lines, idx) or match.group(1)
+        record = {
+            "code": match.group(1),
+            "name": name,
+            "enabled": "休眠模式" not in block,
+            "status": "休眠" if "休眠模式" in block else "监控中",
+            "raw_text": block,
+        }
+        base_match = re.search(r"最新基准价([0-9.]+)现价([0-9.]+)现价距基准([+-]?[0-9.]+)%", block)
+        if base_match:
+            record["base_price"] = base_match.group(1)
+            record["last_price"] = base_match.group(2)
+            record["distance_from_base_pct"] = base_match.group(3)
+        range_match = re.search(r"价格区间[:：]([0-9.]+)元[～~-]([0-9.]+)元", block)
+        if range_match:
+            record["lower_price"] = range_match.group(1)
+            record["upper_price"] = range_match.group(2)
+        sell_match = re.search(r"上升([+-]?[0-9.]+)%[，,]\s*回落([+-]?[0-9.]+)%[，,]\s*卖出", block)
+        if sell_match:
+            record["sell_rise_pct"] = sell_match.group(1)
+            record["sell_pullback_pct"] = sell_match.group(2)
+        buy_match = re.search(r"下跌([+-]?[0-9.]+)%[，,]\s*反弹([+-]?[0-9.]+)%[，,]\s*买入", block)
+        if buy_match:
+            record["buy_fall_pct"] = abs(float(buy_match.group(1)))
+            record["buy_rebound_pct"] = buy_match.group(2)
+        quantity_match = re.search(r"委托股数[:：]\s*(\d+)股", block)
+        if quantity_match:
+            record["order_quantity"] = quantity_match.group(1)
+            record["buy_quantity"] = quantity_match.group(1)
+            record["sell_quantity"] = quantity_match.group(1)
+        min_base_match = re.search(r"最小底仓\s*(\d+)股", block)
+        if min_base_match:
+            record["min_base_quantity"] = min_base_match.group(1)
+        max_position_match = re.search(r"最大持仓\s*(\d+)股", block)
+        if max_position_match:
+            record["max_position_quantity"] = max_position_match.group(1)
+        records.append(record)
     return records
+
+
+def _previous_name(lines: list[str], idx: int) -> str | None:
+    for pos in range(idx - 1, max(-1, idx - 5), -1):
+        line = lines[pos].strip()
+        if not line or _is_code(line) or re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", line, flags=re.I):
+            continue
+        if line.startswith("截止日期") or line in {"监控中", "已委托", "历史记录", "网格交易", "双向"}:
+            continue
+        if any(word in line for word in ("委托", "价格区间", "现价", "上升", "下跌", "改单", "暂停", "删除", "详情", "延期")):
+            continue
+        return line
+    return None
 
 
 def _expected_grid_count(text: str) -> int | None:

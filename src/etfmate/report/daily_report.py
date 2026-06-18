@@ -67,7 +67,7 @@ def _group_by_etf(recommendations: list[dict], grid_advices: list[dict]) -> list
             continue
         result.setdefault(code, {"code": code, "recommendation": None, "grid": None})
         result[code]["recommendation"] = item
-        result[code]["name"] = item.get("name") or result[code].get("name") or code
+        result[code]["name"] = _preferred_name(result[code].get("name"), item.get("name"), code)
         if code not in order:
             order.append(code)
     for item in grid_advices:
@@ -76,7 +76,7 @@ def _group_by_etf(recommendations: list[dict], grid_advices: list[dict]) -> list
             continue
         result.setdefault(code, {"code": code, "recommendation": None, "grid": None})
         result[code]["grid"] = item
-        result[code]["name"] = item.get("name") or result[code].get("name") or code
+        result[code]["name"] = _preferred_name(result[code].get("name"), item.get("name"), code)
         if code not in order:
             order.append(code)
     return [result[code] for code in order]
@@ -94,14 +94,13 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "code": code,
         "name": str(name),
         "title_meta": _title_meta(rec, grid),
-        "action_pill": _pill(action, _action_class(action)),
-        "grid_pill": _pill(grid_action, _grid_action_class(grid_action)),
-        "holding": _holding_view(rec),
-        "grid": _grid_view(grid),
+        "action_pill": _pill(f"持仓动作：{_display_action(action)}", _action_class(action)),
+        "grid_pill": _pill(f"网格动作：{_display_action(grid_action)}", _grid_action_class(grid_action)),
+        "holding": _holding_view(rec, grid),
     }
 
 
-def _holding_view(item: dict | None) -> dict[str, Any]:
+def _holding_view(item: dict | None, grid: dict | None = None) -> dict[str, Any]:
     if not item:
         return {"empty": True, "message": "无当前持仓或行情建议。", "rows": []}
     rows = [
@@ -109,10 +108,11 @@ def _holding_view(item: dict | None) -> dict[str, Any]:
         _row("BOLL", _boll_summary(item), _boll_levels(item), _boll_alert(item)),
         _row("MA", _ma_summary(item), _ma_compare(item), _ma_alert(item)),
         _row("量能(VOL)", _volume_summary(item), _volume_compare(item), _volume_alert(item)),
-        _merged_row("七层证据", _layered_evidence_html(item)),
         _row("真实波幅(ATR)", _atr_summary(item), _atr_compare(item), _atr_alert(item)),
         _row("乖离率(BIAS)", _bias_summary(item), _bias_compare(item), _bias_alert(item)),
         _merged_row("动作", _action_merged_html(item)),
+        _merged_row("网格建议", _grid_table_html(grid)),
+        _merged_row("七层证据", _layered_evidence_html(item)),
         _merged_row("总述", _overview_html(item)),
     ]
     return {"empty": False, "message": "", "rows": rows}
@@ -129,6 +129,34 @@ def _grid_view(item: dict | None) -> dict[str, Any]:
         _merged_row("动作", _grid_action_merged_html(item)),
     ]
     return {"empty": False, "message": "", "rows": rows}
+
+
+def _grid_table_html(item: dict | None) -> str:
+    grid = _grid_view(item)
+    if grid["empty"]:
+        return f'<span class="empty">{escape(grid["message"])}</span>'
+    body = []
+    for row in grid["rows"]:
+        label = escape(str(row["label"]))
+        if row.get("merged"):
+            body.append(f'<tr><th>{label}</th><td class="merged-cell" colspan="3">{row["content"]}</td></tr>')
+        else:
+            body.append(
+                "<tr>"
+                f"<th>{label}</th>"
+                f"<td>{row['current']}</td>"
+                f"<td>{row['reference']}</td>"
+                f"<td>{row['alert']}</td>"
+                "</tr>"
+            )
+    return (
+        '<div class="table-scroll embedded-scroll">'
+        '<table class="dense embedded-grid">'
+        "<thead><tr><th>项</th><th>当前</th><th>建议</th><th>提醒</th></tr></thead>"
+        f"<tbody>{''.join(body)}</tbody>"
+        "</table>"
+        "</div>"
+    )
 
 
 def _trade_review_view(trade_review: dict) -> dict[str, Any]:
@@ -185,6 +213,7 @@ def _title_meta(item: dict | None, grid: dict | None) -> str:
         parts.extend(
             [
                 f"持仓 {_num(item.get('quantity'), 0)}",
+                f"仓位 {_pct(item.get('position_pct'))}",
                 f"浮盈亏 {_color_number(item.get('pnl_pct'), suffix='%')}",
             ]
         )
@@ -359,8 +388,9 @@ def _action_merged_html(item: dict) -> str:
     parts = [
         _action_text(item),
         _inline_label("备注", item.get("investor_note")),
-        _inline_label("仓位", item.get("position_plan")),
-        _inline_label("理由", "；".join(item.get("reasons") or [])),
+        _inline_label("仓位占比", _position_text(item)),
+        _inline_label("执行", item.get("position_plan")),
+        _inline_label("依据", "；".join(_filtered_action_reasons(item))),
     ]
     return _join_html(parts)
 
@@ -369,7 +399,7 @@ def _action_text(item: dict) -> str:
     action = str(item.get("action") or "-")
     qty = item.get("action_quantity")
     qty_text = "" if qty in (None, "") else f"；参考 {_num(qty, 0)} 份"
-    return _span(action + qty_text, _action_class(action))
+    return _span(_display_action(action) + qty_text, _action_class(action))
 
 
 def _overview_html(item: dict) -> str:
@@ -428,6 +458,28 @@ def _filtered_risks(item: dict) -> list[str]:
     ]
 
 
+def _filtered_action_reasons(item: dict) -> list[str]:
+    reasons = [
+        str(reason)
+        for reason in (item.get("reasons") or [])
+        if "七层证据" not in str(reason) and "缺少 " not in str(reason)
+    ]
+    if not reasons:
+        reasons = [
+            str(risk)
+            for risk in _filtered_risks(item)
+            if "七层证据" not in str(risk) and "缺少 " not in str(risk)
+        ]
+    return reasons[:4]
+
+
+def _position_text(item: dict) -> str:
+    tier = _cell(item.get("position_tier"))
+    pct = _pct(item.get("position_pct"))
+    value = _num(item.get("market_value"), 2)
+    return f"{pct}，{tier}，市值 {value}"
+
+
 def _grid_row(label: str, current: Any, suggested: Any, suffix: str) -> dict[str, Any]:
     changed = _changed(current, suggested)
     return _row(
@@ -472,7 +524,7 @@ def _volume_alert(item: dict) -> str:
 def _grid_action_merged_html(item: dict) -> str:
     return _join_html(
         [
-            _span(item.get("action"), _grid_action_class(str(item.get("action") or ""))),
+            _span(f"网格动作：{_display_action(str(item.get('action') or '-'))}", _grid_action_class(str(item.get("action") or ""))),
             _inline_label("依据", "；".join(item.get("reasons") or [])),
         ]
     )
@@ -502,6 +554,29 @@ def _merged_row(label: str, content: str) -> dict[str, Any]:
 
 def _pill(text: str, cls: str) -> str:
     return f'<span class="pill {escape(cls)}">{escape(text)}</span>'
+
+
+def _display_action(action: str) -> str:
+    return "暂停买入侧" if action == "暂停网格" else action
+
+
+def _preferred_name(current: Any, candidate: Any, code: str) -> str:
+    current_text = _cell(current)
+    candidate_text = _cell(candidate)
+    if _is_human_etf_name(current_text, code):
+        return current_text
+    if _is_human_etf_name(candidate_text, code):
+        return candidate_text
+    return candidate_text if candidate_text != "-" else current_text if current_text != "-" else code
+
+
+def _is_human_etf_name(value: str, code: str) -> bool:
+    text = str(value or "").strip()
+    if not text or text == "-" or text == code:
+        return False
+    if text.lower() in {code.lower(), f"{code}.sh", f"{code}.sz", f"sh{code}", f"sz{code}"}:
+        return False
+    return bool(any("\u4e00" <= ch <= "\u9fff" for ch in text))
 
 
 def _span(value: Any, cls: str) -> str:
@@ -546,20 +621,20 @@ def _signed_metric_pct(value: Any) -> str:
 
 
 def _action_class(action: str) -> str:
+    if "暂停" in action:
+        return "action-pause"
     if any(word in action for word in ("买入", "加仓")):
         return "action-buy"
     if any(word in action for word in ("减仓", "卖出")):
         return "action-sell"
-    if "暂停" in action:
-        return "action-pause"
     return "neutral"
 
 
 def _grid_action_class(action: str) -> str:
-    if any(word in action for word in ("调宽", "调窄", "调整")):
-        return "warn"
     if "暂停" in action:
         return "action-pause"
+    if any(word in action for word in ("调宽", "调窄", "调整", "降低")):
+        return "warn"
     return "neutral"
 
 
