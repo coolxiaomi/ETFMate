@@ -1,33 +1,63 @@
 from __future__ import annotations
 
-import json
-import os
-import urllib.error
-import urllib.request
+from pathlib import Path
 from typing import Any
 
-
-DEFAULT_MODEL = "gpt-5-mini"
-DEFAULT_RESPONSES_URL = "https://api.openai.com/v1/responses"
+from etfmate.storage.repository import read_json
 
 
-def build_ai_judgements(recommendations: list[dict], grid_advices: list[dict]) -> dict[str, dict[str, Any]]:
-    enabled = os.environ.get("ETFMATE_AI_ENABLED", "auto").strip().lower()
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ETFMATE_OPENAI_API_KEY")
-    if enabled in {"0", "false", "off", "disabled", "否"}:
-        return _disabled(recommendations, "AI 综合研判已通过 ETFMATE_AI_ENABLED 关闭")
-    if not api_key:
-        return _disabled(recommendations, "未配置 OPENAI_API_KEY/ETFMATE_OPENAI_API_KEY，AI 综合研判未启用")
+AI_REVIEW_INPUT_FILE = "ai_review_input.json"
+AI_JUDGEMENTS_FILE = "ai_judgements.json"
 
-    compact = _compact_payload(recommendations, grid_advices)
-    try:
-        rows = _call_openai(api_key, compact)
-    except Exception as exc:
-        return _disabled(recommendations, f"AI 综合研判调用失败：{type(exc).__name__}: {exc}")
-    result = {str(item.get("code")): _normalize_item(item) for item in rows if item.get("code")}
+
+def build_ai_review_input(recommendations: list[dict], grid_advices: list[dict]) -> dict[str, Any]:
+    return {
+        "role": "host_ai_review_input",
+        "instructions": (
+            "你是当前宿主 AI 工具的 ETF 组合风控和网格交易复核助手。只基于 items 中的结构化证据研判，"
+            "不得编造行情、新闻、研报或公告；不得承诺收益；不得给满仓/梭哈建议。规则引擎的硬过滤、"
+            "可用数量、流动性约束和数据缺失降级必须优先。输出写入 ai_judgements.json。"
+        ),
+        "schema": {
+            "items": [
+                {
+                    "code": "ETF代码",
+                    "ai_action": "复核动作或倾向",
+                    "confidence": "0-100整数",
+                    "judgement": "综合研判，必须基于输入证据",
+                    "conflicts": ["与规则建议或证据之间的冲突点"],
+                    "guardrails": ["必须遵守的风控护栏"],
+                    "final_bias": "保持规则建议/降级为保守/需要人工确认",
+                }
+            ]
+        },
+        "items": _compact_payload(recommendations, grid_advices),
+    }
+
+
+def load_host_ai_judgements(root: Path, run_id: str, recommendations: list[dict]) -> dict[str, dict[str, Any]]:
+    path = root / "data/raw/market" / run_id / AI_JUDGEMENTS_FILE
+    if not path.exists():
+        return _pending(recommendations, f"宿主 AI 尚未回写 {path.as_posix()}，当前仅展示规则引擎建议")
+    payload = read_json(path, default={})
+    return normalize_host_ai_judgements(payload, recommendations)
+
+
+def normalize_host_ai_judgements(payload: Any, recommendations: list[dict]) -> dict[str, dict[str, Any]]:
+    rows: list[Any]
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        rows = payload["items"]
+    elif isinstance(payload, dict):
+        rows = list(payload.values())
+    else:
+        rows = []
+
+    result = {str(item.get("code")): _normalize_item(item) for item in rows if isinstance(item, dict) and item.get("code")}
     for item in recommendations:
         code = str(item.get("code") or "")
-        result.setdefault(code, _fallback_item(code, "AI 未返回该 ETF 的研判"))
+        result.setdefault(code, _fallback_item(code, "宿主 AI 未返回该 ETF 的研判"))
     return result
 
 
@@ -36,51 +66,6 @@ def attach_ai_judgements(recommendations: list[dict], judgements: dict[str, dict
         code = str(item.get("code") or "")
         item["ai_judgement"] = judgements.get(code) or _fallback_item(code, "AI 综合研判未生成")
     return recommendations
-
-
-def _call_openai(api_key: str, payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    model = os.environ.get("ETFMATE_AI_MODEL", DEFAULT_MODEL)
-    url = os.environ.get("ETFMATE_OPENAI_RESPONSES_URL", DEFAULT_RESPONSES_URL)
-    body = {
-        "model": model,
-        "input": [
-            {
-                "role": "system",
-                "content": (
-                    "你是ETF组合风控和网格交易复核助手。只基于用户给出的结构化证据研判，"
-                    "不得编造行情、新闻、研报或公告。不得承诺收益，不得给满仓/梭哈建议。"
-                    "规则引擎的硬过滤、禁止交易、流动性约束和数据缺失降级必须优先。"
-                    "输出必须是JSON数组。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    "请复核以下ETF规则建议。每项输出字段：code, ai_action, confidence, judgement, "
-                    "conflicts, guardrails, final_bias。confidence为0-100整数；final_bias只能是"
-                    "保持规则建议、降级为保守、需要人工确认。数据不足时应降级或人工确认。\n"
-                    + json.dumps(payload, ensure_ascii=False)
-                ),
-            },
-        ],
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")[:300]
-        raise RuntimeError(f"HTTP {exc.code} {detail}") from exc
-    text = _response_text(data)
-    parsed = json.loads(_strip_code_fence(text))
-    if not isinstance(parsed, list):
-        raise RuntimeError("AI 返回不是 JSON 数组")
-    return parsed
 
 
 def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> list[dict[str, Any]]:
@@ -96,6 +81,7 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
                 "name": item.get("name"),
                 "position": {
                     "quantity": item.get("quantity"),
+                    "available_quantity": item.get("available_quantity"),
                     "position_pct": item.get("position_pct"),
                     "pnl_pct": item.get("pnl_pct"),
                     "note": item.get("investor_note"),
@@ -141,30 +127,7 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
     return rows
 
 
-def _response_text(data: dict[str, Any]) -> str:
-    if data.get("output_text"):
-        return str(data["output_text"])
-    parts: list[str] = []
-    for output in data.get("output") or []:
-        for content in output.get("content") or []:
-            if content.get("type") in {"output_text", "text"}:
-                parts.append(str(content.get("text") or ""))
-    text = "\n".join(part for part in parts if part)
-    if not text:
-        raise RuntimeError("AI 响应没有文本内容")
-    return text
-
-
-def _strip_code_fence(text: str) -> str:
-    value = text.strip()
-    if value.startswith("```"):
-        value = value.split("\n", 1)[1] if "\n" in value else value
-        if value.endswith("```"):
-            value = value[:-3]
-    return value.strip()
-
-
-def _disabled(recommendations: list[dict], reason: str) -> dict[str, dict[str, Any]]:
+def _pending(recommendations: list[dict], reason: str) -> dict[str, dict[str, Any]]:
     return {str(item.get("code") or ""): _fallback_item(str(item.get("code") or ""), reason) for item in recommendations}
 
 
@@ -172,11 +135,11 @@ def _fallback_item(code: str, reason: str) -> dict[str, Any]:
     return {
         "code": code,
         "enabled": False,
-        "ai_action": "未启用",
+        "ai_action": "待宿主AI复核",
         "confidence": 0,
         "judgement": reason,
         "conflicts": [],
-        "guardrails": ["AI 未生成时，最终动作完全按规则引擎和风险约束执行"],
+        "guardrails": ["宿主 AI 未回写时，最终动作完全按规则引擎和风险约束执行"],
         "final_bias": "保持规则建议",
     }
 

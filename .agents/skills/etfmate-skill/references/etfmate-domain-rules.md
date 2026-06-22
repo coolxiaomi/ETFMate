@@ -19,7 +19,6 @@ Touker：
 行情与指标：
 
 - 行情/K线来源由 `$a-stock-data` 或当前行情适配器自行选择，本 skill 不指定优先级。
-- 指标至少包含 MA5/10/20/60/200、BOLL、成交量/VOL、VOL MA5/20、量比、换手、振幅、ATR7/14/30/60、BIAS6/12/24。
 - 指标至少包含 MA5/10/20/60/120/200、BOLL、成交量/VOL、VOL MA5/20、量比、换手、振幅、ATR7/14/30/60、BIAS6/12/24、RSI14、RET5/20/60、60日最大回撤、20日成交额均值和成交额比。
 - 可按需要增加 ETF 成分股重合度、行业/主题暴露、规模、费率、跟踪误差、资金流、折溢价、IOPV 和相对强弱。
 
@@ -30,7 +29,7 @@ Touker：
 - 置信度按层覆盖度计算。缺少研报、资金、新闻、基础、公告等深层证据时，持仓建议和网格建议必须降强度：强买/强卖降为分批或部分处理，网格调参只做保守建议。
 - 当前行情、持仓、Touker 网格和用户备注属于实时决策基础；它们不能替代 a-stock-data 的深层层面，但可以作为局部证据参与评分。
 - ETF 重合度应优先从成分股/主题/行业暴露验证；当前只有名称启发式时，必须标记为 `部分接入` 并提示后续用成分股重合度补证。
-- AI 综合研判只读取已采集的结构化证据和规则评分，不能自行补写未采集到的研报、新闻、公告或资金结论。AI 与规则冲突时，必须说明冲突证据；硬过滤、可用数量、流动性约束和数据缺失降级优先。
+- AI 综合研判只读取已采集的结构化证据和规则评分，不能自行补写未采集到的研报、新闻、公告或资金结论。AI 与规则冲突时，必须说明冲突证据；硬过滤、可用数量、流动性约束和数据缺失降级优先。AI 研判由当前宿主 AI 工具会话模型完成，本地 CLI 不配置 API Key 或模型。
 
 ## 规则评分
 
@@ -60,11 +59,17 @@ Touker：
 `MarketSnapshot`：
 
 - `code`、`name`、`last_price`、`pct_chg`、`volume`、`amount`、`amplitude_pct`、`turnover_pct`、`vol_ratio`
-- `ma5`、`ma10`、`ma20`、`ma60`、`ma200`
+- `ma5`、`ma10`、`ma20`、`ma60`、`ma120`、`ma200`
 - `boll_upper`、`boll_mid`、`boll_lower`
 - `atr7`、`atr7_pct`、`atr14`、`atr14_pct`、`atr30`、`atr30_pct`、`atr60`、`atr60_pct`
 - `bias6`、`bias12`、`bias24`
-- `vol_ma5`、`vol_ma20`
+- `vol_ma5`、`vol_ma20`、`amount_avg20`、`amount_ratio20`、`rsi14`、`ret3`、`ret5`、`ret20`、`ret60`、`max_drawdown_60`、`ma20_slope_pct`、`kline_days`
+
+`Host AI Judgement`：
+
+- `analyze` 生成 `data/raw/market/RUN_ID/ai_review_input.json`，供宿主 AI 当前会话模型读取。
+- 宿主 AI 写回 `data/raw/market/RUN_ID/ai_judgements.json`，格式为 `{items:[{code, ai_action, confidence, judgement, conflicts, guardrails, final_bias}]}`，或直接使用 code -> judgement 的对象。
+- `report` 读取写回文件并展示；未写回时显示“待宿主AI复核”，不要求用户配置额外 API Key。
 
 ## 持仓建议规则
 
@@ -111,7 +116,7 @@ Touker：
 - 每个 ETF 标题行带现价、涨跌、持仓、浮盈亏和网格状态；基础信息小字号。
 - 每只 ETF 只使用一个横向大表格，不使用左右并排的持仓表和网格表。
 - 持仓表至少包含：持仓、BOLL、MA、量能(VOL)、真实波幅(ATR)、乖离率(BIAS)、动作、网格建议、七层证据、总述。
-- 持仓表必须包含“规则评分”和“AI综合研判”：规则评分展示综合/趋势/动量/风险/过滤状态；AI综合研判展示是否启用、置信度、冲突点、护栏和最终倾向。
+- 持仓表必须包含“规则评分”和“AI综合研判”：规则评分展示综合/趋势/动量/风险/过滤状态；AI综合研判展示宿主 AI 是否已回写、置信度、冲突点、护栏和最终倾向。
 - 网格建议必须作为完整的嵌入表格放在“动作”行下方、“七层证据”行上方；嵌入表格至少包含：买入触发、卖出触发、委托股数、卖出股数、动作。
 - 动作行必须展示仓位占比和仓位层级；动作行不要重复七层证据长摘要，七层证据只在下方合并行展示。
 - 动作行和总述行使用合并单元格，避免表格过宽。
@@ -127,6 +132,8 @@ data/raw/ths/RUN_ID/account.json
 data/raw/touker/RUN_ID/grids.json
 data/raw/market/RUN_ID/snapshots.json
 data/raw/market/RUN_ID/analysis.json
+data/raw/market/RUN_ID/ai_review_input.json
+data/raw/market/RUN_ID/ai_judgements.json
 data/reports/RUN_ID-etf-realtime.html
 runtime/
 ```

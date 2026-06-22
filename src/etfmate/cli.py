@@ -5,7 +5,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from etfmate.analysis.ai_advisor import attach_ai_judgements, build_ai_judgements
+from etfmate.analysis.ai_advisor import (
+    AI_JUDGEMENTS_FILE,
+    AI_REVIEW_INPUT_FILE,
+    attach_ai_judgements,
+    build_ai_review_input,
+    load_host_ai_judgements,
+    normalize_host_ai_judgements,
+)
 from etfmate.analysis.grid_advisor import advise_grid
 from etfmate.analysis.layered_context import build_layered_context, context_to_dict
 from etfmate.analysis.recommendation import recommend
@@ -35,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
     report = sub.add_parser("report")
     report.add_argument("--run-id", help="要生成报告的实时运行编号，默认使用最新一次分析")
 
+    ai_attach = sub.add_parser("ai-attach")
+    ai_attach.add_argument("--run-id", required=True, help="要写入宿主 AI 综合研判的实时运行编号")
+    ai_attach.add_argument("--input", required=True, help="宿主 AI 生成的 ai_judgements JSON 文件")
+
     run = sub.add_parser("run")
     run.add_argument("--run-id", help="实时运行编号，默认使用当前时间")
 
@@ -53,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.cmd == "report":
             run_report(root, args.run_id or latest_run_id(root))
+            return 0
+        if args.cmd == "ai-attach":
+            run_ai_attach(root, args.run_id, Path(args.input))
             return 0
         if args.cmd == "run":
             run_id = run_id_str(args.run_id)
@@ -118,7 +132,9 @@ def run_analyze(root: Path, run_id: str) -> None:
         for item in grids
         if item.code in snapshots_by_code
     ]
-    ai_judgements = build_ai_judgements(recommendations, grid_advices)
+    ai_review_input = build_ai_review_input(recommendations, grid_advices)
+    write_json(root / "data/raw/market" / run_id / AI_REVIEW_INPUT_FILE, ai_review_input)
+    ai_judgements = load_host_ai_judgements(root, run_id, recommendations)
     recommendations = attach_ai_judgements(recommendations, ai_judgements)
     run_date = _run_date(run_id)
     payload = {
@@ -130,6 +146,7 @@ def run_analyze(root: Path, run_id: str) -> None:
         "layered_contexts": {code: context_to_dict(context) for code, context in layered_contexts.items()},
         "recommendations": recommendations,
         "grid_advices": grid_advices,
+        "ai_review_input_path": f"data/raw/market/{run_id}/{AI_REVIEW_INPUT_FILE}",
         "ai_judgements": ai_judgements,
         "trade_review": review_trades(trades),
         "trade_reviews": review_trade_periods(trades, run_date),
@@ -137,6 +154,7 @@ def run_analyze(root: Path, run_id: str) -> None:
     write_json(root / "data/raw/market" / run_id / "snapshots.json", snapshots)
     write_json(root / "data/raw/market" / run_id / "analysis.json", payload)
     print(f"已生成实时分析结果: data/raw/market/{run_id}/analysis.json")
+    print(f"已生成宿主 AI 复核输入: data/raw/market/{run_id}/{AI_REVIEW_INPUT_FILE}")
 
 
 def run_report(root: Path, run_id: str) -> None:
@@ -147,6 +165,8 @@ def run_report(root: Path, run_id: str) -> None:
     grid_payload = read_json(root / "data/raw/touker" / run_id / "grids.json", default={})
     recommendations = analysis.get("recommendations", [])
     grid_advices = analysis.get("grid_advices", [])
+    ai_judgements = load_host_ai_judgements(root, run_id, recommendations)
+    recommendations = attach_ai_judgements(recommendations, ai_judgements)
     review = analysis.get("trade_review") or review_trades([])
     if analysis.get("trade_reviews"):
         review = {**review, "periods": analysis["trade_reviews"]}
@@ -159,7 +179,6 @@ def run_report(root: Path, run_id: str) -> None:
     snapshots = analysis.get("market_snapshots", [])
     sources = {s.get("data_quality", "") for s in snapshots if isinstance(s, dict) and s.get("data_quality")}
     layered_contexts = analysis.get("layered_contexts") or {}
-    ai_judgements = analysis.get("ai_judgements") or {}
     ai_enabled_count = sum(1 for item in ai_judgements.values() if isinstance(item, dict) and item.get("enabled"))
     layer_count = len(layered_contexts)
     avg_layer_confidence = _avg_number(item.get("confidence") for item in layered_contexts.values() if isinstance(item, dict))
@@ -179,14 +198,30 @@ def run_report(root: Path, run_id: str) -> None:
             {
                 "label": "AI 综合研判",
                 "count": f"{len(ai_judgements)} 只，已启用 {ai_enabled_count} 只",
-                "source": "OpenAI Responses API（配置 API Key 后启用）",
-                "note": "AI 只做证据复核，不绕过规则硬过滤",
+                "source": "宿主 AI 工具当前会话模型",
+                "note": f"读取 {AI_JUDGEMENTS_FILE}；不需要额外 API Key，AI 只做证据复核",
             },
         ]
     }
     label = analysis.get("analysis_time") or _analysis_time(run_id)
     out = write_report(root / "data/reports" / f"{run_id}-etf-realtime.html", label, recommendations, grid_advices, review, data_completeness)
     print(f"已生成实时报告: {out}")
+
+
+def run_ai_attach(root: Path, run_id: str, input_path: Path) -> None:
+    analysis_path = root / "data/raw/market" / run_id / "analysis.json"
+    analysis = read_json(analysis_path, default={})
+    if not analysis:
+        raise RuntimeError(f"未找到分析结果: data/raw/market/{run_id}/analysis.json")
+    source = input_path if input_path.is_absolute() else (root / input_path)
+    payload = read_json(source, default={})
+    recommendations = analysis.get("recommendations", [])
+    ai_judgements = normalize_host_ai_judgements(payload, recommendations)
+    write_json(root / "data/raw/market" / run_id / AI_JUDGEMENTS_FILE, ai_judgements)
+    analysis["ai_judgements"] = ai_judgements
+    analysis["recommendations"] = attach_ai_judgements(recommendations, ai_judgements)
+    write_json(analysis_path, analysis)
+    print(f"已写入宿主 AI 综合研判: data/raw/market/{run_id}/{AI_JUDGEMENTS_FILE}")
 
 
 def latest_run_id(root: Path) -> str:

@@ -1,4 +1,4 @@
 interface:
   display_name: "ETFMate Skill"
   short_description: "采集 ETF 持仓、网格与七层证据，结合规则评分和 AI 复核生成 HTML 分析"
-  default_prompt: "Use $etfmate-skill and $web-access to run a real-time ETFMate analysis from logged-in 同花顺投资账本 and Touker pages with rule scores, a-stock-data seven-layer evidence, and guarded AI judgement."
+  default_prompt: "Use $etfmate-skill and $web-access to run a real-time ETFMate analysis from logged-in 同花顺投资账本 and Touker pages. Generate rule scores, read ai_review_input.json, use the current host AI model for guarded AI judgement, write ai_judgements.json, and render the HTML report."

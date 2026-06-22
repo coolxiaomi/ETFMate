@@ -15,7 +15,7 @@ description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用于�
 - 行情和技术指标交给 `$a-stock-data` 或当前项目行情适配器自行决策数据源；本 skill 不固定要求腾讯、mootdx、百度或东方财富的优先级。
 - 分析必须按 `$a-stock-data` 七层架构组织证据：行情技术、研报预期、热点信号、资金筹码、新闻舆情、基础数据、公告事件。当前实现拿不到的层必须明确标记为“待接入/缺失”，并降低建议强度；不得用技术指标冒充研报、新闻、公告等深层结论。
 - 同花顺投资账本持仓“备注”列是用户本人对 ETF 的看法，分析时必须读取并作为辅助信号。市场指标与备注一致时可以增强建议置信度；不一致时必须指出冲突并降低动作强度。
-- “AI 综合研判”只能作为规则引擎后的证据复核层：规则硬过滤、流动性约束、可用数量、Touker 采集完整性和数据缺失降级优先于 AI 输出。未配置 API Key 或调用失败时必须明确显示未启用，不得伪造 AI 结论。
+- “AI 综合研判”只能作为规则引擎后的证据复核层：规则硬过滤、流动性约束、可用数量、Touker 采集完整性和数据缺失降级优先于 AI 输出。AI 研判由当前宿主 AI 工具的会话模型完成（例如 Codex/Claude Code/opencode 当前选择的模型），ETFMate 本地 CLI 不要求也不应要求用户额外配置 API Key 或模型。
 
 ## 实时运行流程
 
@@ -25,17 +25,28 @@ description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用于�
 2. 使用 web-access 的 CDP Proxy 操作用户 Chrome。优先创建后台 tab，不主动改动用户已有 tab；任务结束关闭自己创建的 tab。
 3. 先进入同花顺投资账本和 Touker 页面采集数据，此时仍不要分析。
 4. 如果任一页面是登录页、验证码页、风控页、协议确认页或页面未加载出关键数据，立即停止并提示用户在 Chrome 中手动处理；用户处理后刷新或继续同一流程。
-5. 只有同花顺持仓/交易和 Touker 网格都采集成功，才继续行情指标、建议生成和 HTML 报告。
+5. 只有同花顺持仓/交易和 Touker 网格都采集成功，才继续行情指标和规则建议生成。
+6. `analyze` 会生成 `data/raw/market/RUN_ID/ai_review_input.json`；宿主 AI 必须读取该文件，使用当前会话模型生成 `ai_judgements.json`，再生成 HTML 报告。
 
 目标页面：
 
 - 同花顺投资账本：`https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO`
 - Touker 网格：`https://m.touker.com/fd/conditions/monitoring`
 
-推荐运行命令：
+快速规则版运行命令：
 
 ```bash
 etfmate run
+```
+
+带 AI 综合研判的推荐流程：
+
+```bash
+etfmate collect --run-id 20260618-153000
+etfmate analyze --run-id 20260618-153000
+# 宿主 AI 读取 data/raw/market/20260618-153000/ai_review_input.json
+# 宿主 AI 生成 data/raw/market/20260618-153000/ai_judgements.json
+etfmate report --run-id 20260618-153000
 ```
 
 调试或回放某次实时快照时，使用 `run_id`：
@@ -43,6 +54,7 @@ etfmate run
 ```bash
 etfmate collect --run-id 20260618-153000
 etfmate analyze --run-id 20260618-153000
+etfmate ai-attach --run-id 20260618-153000 --input data/raw/market/20260618-153000/ai_judgements.json
 etfmate report --run-id 20260618-153000
 ```
 
@@ -95,6 +107,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/check-deps.mjs"
 - 报告中 `暂停网格` 的展示文案必须解释为“暂停买入侧”，并与“网格动作”标签一起展示，避免和持仓动作重复造成误解。“暂停买入侧”不是关闭整个 Touker 条件单，而是买入侧数量降为 0 或临时停用买入触发，卖出/止盈侧纪律保留。
 - 动作行只放动作、仓位占比/仓位层级、执行摘要和不超过 4 条决策依据；不要重复七层证据长摘要，七层证据只放在下方合并行。
 - 每只 ETF 必须展示“规则评分”和“AI综合研判”。规则评分展示综合/趋势/动量/风险/过滤状态；AI 综合研判展示是否启用、置信度、冲突点和护栏。AI 未启用时必须明示原因。
+- AI 综合研判显示“待宿主AI复核”时，说明本地规则分析已经完成，但当前宿主还没有把 `ai_judgements.json` 写回；不得提示用户配置额外 API Key。
 - 单只 ETF 总述不要展示 `quote:tencent;kline:tencent` 等内部 source key。数据完整性表里也要用人能看懂的来源描述。
 - HTML 页面不要写入 ShareOne 发布提示。用户明确要求发布时，再使用 `$shareone` skill。
 

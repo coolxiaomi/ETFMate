@@ -155,6 +155,7 @@ def recommend(
         "code": market.code,
         "name": market.name,
         "quantity": position.quantity if position else None,
+        "available_quantity": position.available_quantity if position else None,
         "market_value": position.market_value if position else None,
         "position_pct": position.position_pct if position else None,
         "position_tier": position_tier,
