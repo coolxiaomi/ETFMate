@@ -79,6 +79,11 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
             {
                 "code": item.get("code"),
                 "name": item.get("name"),
+                "source": {
+                    "candidate_source": item.get("candidate_source"),
+                    "is_watchlist_candidate": item.get("is_watchlist_candidate"),
+                    "watchlist_include_reason": item.get("watchlist_include_reason"),
+                },
                 "position": {
                     "quantity": item.get("quantity"),
                     "available_quantity": item.get("available_quantity"),
@@ -105,6 +110,9 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
                     "momentum": rule.get("momentum_score"),
                     "risk": rule.get("risk_score"),
                     "filter_status": rule.get("filter_status"),
+                    "target_position_pct": rule.get("target_position_pct") or item.get("target_position_pct"),
+                    "entry_plan": item.get("entry_plan"),
+                    "position_plan": item.get("position_plan"),
                     "blocked_actions": rule.get("blocked_actions"),
                     "reasons": item.get("reasons", [])[:4],
                     "risks": item.get("risks", [])[:4],

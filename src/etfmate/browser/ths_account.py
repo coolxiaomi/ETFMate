@@ -9,13 +9,15 @@ from typing import Any
 from .session import WebAccessSession, ensure_login, require_login
 
 
-THS_URL = "https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO"
+THS_POSITION_URL = "https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO"
+THS_WATCHLIST_URL = "https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/ISUeEwK"
+THS_URL = THS_POSITION_URL
 
 
 def ths_login_check(session: WebAccessSession) -> bool:
     text = str(session.eval("document.body ? document.body.innerText : ''") or "")
     negative = ["验证码", "手机号登录", "立即登录"]
-    positive = ["持仓", "资产", "成交", "盈亏"]
+    positive = ["持仓", "资产", "成交", "盈亏", "自选", "添加"]
     return any(word in text for word in positive) and not any(word in text for word in negative)
 
 
@@ -23,7 +25,7 @@ def login(root: Path) -> None:
     with WebAccessSession(root) as session:
         ensure_login(
             session,
-            THS_URL,
+            THS_POSITION_URL,
             ths_login_check,
             "请在 Chrome 中完成同花顺投资账本登录和验证码验证。",
         )
@@ -31,7 +33,7 @@ def login(root: Path) -> None:
 
 def collect(root: Path, out_dir: Path) -> dict:
     with WebAccessSession(root) as session:
-        require_login(session, THS_URL, ths_login_check, "同花顺投资账本未登录或登录验证未完成，请在 Chrome 中手动登录后重新运行。")
+        require_login(session, THS_POSITION_URL, ths_login_check, "同花顺投资账本未登录或登录验证未完成，请在 Chrome 中手动登录后重新运行。")
         out_dir.mkdir(parents=True, exist_ok=True)
         session.screenshot(out_dir / "account_preload.png")
         time.sleep(2)
@@ -42,6 +44,17 @@ def collect(root: Path, out_dir: Path) -> dict:
         (out_dir / "account_snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         (out_dir / "account_text.txt").write_text(str(snapshot.get("text", "")), encoding="utf-8")
         session.screenshot(out_dir / "account.png")
+
+        session.navigate(THS_WATCHLIST_URL)
+        time.sleep(2)
+        session.screenshot(out_dir / "watchlist_preload.png")
+        watchlist_snapshot = _wait_for_watchlist_snapshot(session)
+        if not _watchlist_candidates_from_snapshot(watchlist_snapshot):
+            time.sleep(2)
+        watchlist_snapshot = _as_dict(session.eval(_SNAPSHOT_JS))
+        (out_dir / "watchlist_snapshot.json").write_text(json.dumps(watchlist_snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        (out_dir / "watchlist_text.txt").write_text(str(watchlist_snapshot.get("text", "")), encoding="utf-8")
+        session.screenshot(out_dir / "watchlist.png")
 
     records = _position_records_from_text(str(snapshot.get("text", "")))
     records.extend(_records_from_snapshot(snapshot))
@@ -60,7 +73,45 @@ def collect(root: Path, out_dir: Path) -> dict:
         "quantity",
         "成交数量",
     )
-    return {"positions": positions, "trades": trades, "closed_positions": [], "snapshot": snapshot}
+    watchlist, filtered = extract_watchlist(watchlist_snapshot)
+    watchlist_source_url = str(watchlist_snapshot.get("url") or THS_WATCHLIST_URL)
+    if not watchlist:
+        watchlist, filtered = extract_watchlist(snapshot)
+        watchlist_source_url = str(snapshot.get("url") or THS_POSITION_URL)
+    return {
+        "positions": positions,
+        "trades": trades,
+        "closed_positions": [],
+        "watchlist": watchlist,
+        "watchlist_filtered_out": filtered,
+        "watchlist_stats": {
+            "included": len(watchlist),
+            "filtered": len(filtered),
+            "source_url": watchlist_source_url,
+            "canonical_url": THS_WATCHLIST_URL,
+            "note": "优先从同花顺投资账本自选页提取 ETF 池；自选页无结果时才退回持仓页缓存/DOM，按 ETF/LOF/场内基金规则过滤",
+        },
+        "snapshot": snapshot,
+        "watchlist_snapshot": watchlist_snapshot,
+    }
+
+
+def extract_watchlist(snapshot: dict[str, Any]) -> tuple[list[dict], list[dict]]:
+    candidates = _watchlist_candidates_from_snapshot(snapshot)
+    included: list[dict] = []
+    filtered: list[dict] = []
+    for item in _dedupe(candidates, "code", "name", "source_key"):
+        normalized = _normalize_watch_candidate(item)
+        if not normalized:
+            continue
+        keep, reason = _watch_item_filter(normalized)
+        normalized["include_reason" if keep else "filter_reason"] = reason
+        if keep:
+            normalized["source"] = "ths_watchlist"
+            included.append(normalized)
+        else:
+            filtered.append(normalized)
+    return _dedupe(included, "code"), _dedupe(filtered, "code", "filter_reason")
 
 
 def _wait_for_positions_snapshot(session: WebAccessSession, timeout_seconds: int = 30) -> dict[str, Any]:
@@ -69,6 +120,17 @@ def _wait_for_positions_snapshot(session: WebAccessSession, timeout_seconds: int
     while time.monotonic() < deadline:
         latest = _as_dict(session.eval(_SNAPSHOT_JS))
         if _position_records_from_text(str(latest.get("text", ""))):
+            return latest
+        time.sleep(1)
+    return latest
+
+
+def _wait_for_watchlist_snapshot(session: WebAccessSession, timeout_seconds: int = 30) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    latest: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        latest = _as_dict(session.eval(_SNAPSHOT_JS))
+        if _watchlist_candidates_from_snapshot(latest):
             return latest
         time.sleep(1)
     return latest
@@ -90,6 +152,153 @@ def _records_from_snapshot(snapshot: dict[str, Any]) -> list[dict]:
     for value in (snapshot.get("sessionStorage") or {}).values():
         records.extend(_json_records(value))
     return records
+
+
+def _watchlist_candidates_from_snapshot(snapshot: dict[str, Any]) -> list[dict]:
+    candidates: list[dict] = []
+    candidates.extend(_watchlist_storage_records(snapshot.get("localStorage") or {}, "localStorage"))
+    candidates.extend(_watchlist_storage_records(snapshot.get("sessionStorage") or {}, "sessionStorage"))
+    candidates.extend(_watchlist_records_from_text(str(snapshot.get("text") or ""), "page_text"))
+    for row_text in snapshot.get("virtualRows") or []:
+        candidates.extend(_watchlist_records_from_text(str(row_text), "virtual_row"))
+    for item in snapshot.get("watchNodes") or []:
+        if isinstance(item, dict):
+            candidates.extend(_watchlist_records_from_text(str(item.get("text") or ""), str(item.get("source") or "dom_node")))
+    return candidates
+
+
+def _watchlist_storage_records(storage: dict[str, Any], source: str) -> list[dict]:
+    records: list[dict] = []
+    for key, value in storage.items():
+        source_key = f"{source}:{key}"
+        key_text = str(key).lower()
+        parsed = _json_value(value)
+        key_suggests_watchlist = any(
+            token in key_text
+            for token in (
+                "自选",
+                "watch",
+                "optional",
+                "favorite",
+                "fav",
+                "self",
+                "defaultpositioin",
+                "defaultposition",
+                "positionlist",
+                "stock_item",
+            )
+        )
+        for item in _walk_records(parsed, _looks_like_watch_candidate):
+            enriched = dict(item)
+            enriched.setdefault("source_key", source_key)
+            if key_suggests_watchlist or _fund_like_code_or_name(enriched):
+                records.append(enriched)
+    return records
+
+
+def _watchlist_records_from_text(text: str, source_key: str) -> list[dict]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    records: list[dict] = []
+    for idx, line in enumerate(lines):
+        if not _is_code(line):
+            continue
+        name = ""
+        if idx + 1 < len(lines) and not _is_code(lines[idx + 1]) and not _looks_like_number(lines[idx + 1]):
+            name = lines[idx + 1]
+        records.append({"code": line, "name": name or line, "source_key": source_key})
+    return records
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _looks_like_watch_candidate(item: dict) -> bool:
+    code = _pick_value(item, "code", "symbol", "stockCode", "securityCode", "stock_code", "zqdm", "证券代码", "代码")
+    name = _pick_value(item, "name", "stock_name", "securityName", "stockName", "证券名称", "名称")
+    return _is_code(code) and bool(str(name or "").strip())
+
+
+def _normalize_watch_candidate(item: dict) -> dict | None:
+    code = _normalize_code(_pick_value(item, "code", "symbol", "stockCode", "securityCode", "stock_code", "zqdm", "证券代码", "代码"))
+    if not code:
+        return None
+    name = str(_pick_value(item, "name", "stock_name", "securityName", "stockName", "证券名称", "名称", default=code)).strip() or code
+    return {
+        "code": code,
+        "name": name,
+        "raw_type": str(_pick_value(item, "type", "market", "securityType", "assetType", default="") or ""),
+        "source_key": str(item.get("source_key") or ""),
+    }
+
+
+def _watch_item_filter(item: dict) -> tuple[bool, str]:
+    code = str(item.get("code") or "")
+    name = str(item.get("name") or "")
+    text = f"{name} {item.get('raw_type') or ''}"
+    if not code:
+        return False, "缺少代码"
+    if _is_convertible_bond(code, text):
+        return False, "过滤可转债"
+    if _looks_like_hk_stock(code, text):
+        return False, "过滤港股股票；跨境 ETF 需使用 A 股场内基金代码"
+    if _is_fund_code(code):
+        return True, "场内基金代码段，保留 ETF/LOF/场内基金"
+    if any(word in text.upper() for word in ("ETF", "LOF", "REIT")) or any(word in text for word in ("基金", "场内基金")):
+        if _is_a_share_stock_code(code):
+            return False, "名称像基金但代码是 A 股股票段，需人工确认后再纳入"
+        return True, "名称包含 ETF/LOF/基金"
+    if _is_a_share_stock_code(code):
+        return False, "过滤 A 股股票"
+    return False, "非 ETF/LOF/场内基金代码段"
+
+
+def _fund_like_code_or_name(item: dict) -> bool:
+    code = _normalize_code(_pick_value(item, "code", "symbol", "stockCode", "securityCode", "stock_code", "zqdm", "证券代码", "代码"))
+    name = str(_pick_value(item, "name", "stock_name", "securityName", "stockName", "证券名称", "名称", default=""))
+    return bool(code and (_is_fund_code(code) or any(word in name.upper() for word in ("ETF", "LOF", "REIT")) or "基金" in name))
+
+
+def _is_fund_code(code: str) -> bool:
+    return bool(re.fullmatch(r"\d{6}", code)) and code[:2] in {"15", "16", "50", "51", "52", "56", "58"}
+
+
+def _is_a_share_stock_code(code: str) -> bool:
+    return bool(re.fullmatch(r"\d{6}", code)) and code[:3] in {"000", "001", "002", "003", "300", "301", "600", "601", "603", "605", "688", "689"}
+
+
+def _is_convertible_bond(code: str, text: str) -> bool:
+    return code[:2] in {"11", "12"} or code[:3] in {"123", "127", "128"} or any(word in text for word in ("转债", "可转债"))
+
+
+def _looks_like_hk_stock(code: str, text: str) -> bool:
+    raw = str(code or "").lower()
+    if raw.startswith("hk") or re.fullmatch(r"\d{5}", raw):
+        return True
+    return bool(not _is_fund_code(code) and any(word in text for word in ("港股", "港交所", "HK")))
+
+
+def _normalize_code(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"^(sh|sz)", "", text)
+    text = re.sub(r"\.(sh|sz)$", "", text)
+    return text if re.fullmatch(r"\d{6}", text) else ""
+
+
+def _pick_value(raw: dict, *names: str, default: Any = None) -> Any:
+    for name in names:
+        if name in raw and raw[name] not in (None, ""):
+            return raw[name]
+    return default
+
+
+def _looks_like_number(value: str) -> bool:
+    return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?%?", str(value or "").replace(",", "")))
 
 
 def _position_records_from_text(text: str) -> list[dict]:
@@ -226,12 +435,17 @@ _SNAPSHOT_JS = r"""
     .map((el) => el.innerText ? el.innerText.trim() : "")
     .filter((value) => /(^|\n)(?:sh|sz)?\d{6}(\n|$)/i.test(value))
     .slice(0, 500);
+  const watchNodes = Array.from(document.querySelectorAll("[class*='optional'],[class*='watch'],[class*='self'],[class*='stock'],[class*='fund'],div,li"))
+    .map((el) => ({ source: el.className ? String(el.className).slice(0, 120) : el.tagName, text: el.innerText ? el.innerText.trim() : "" }))
+    .filter((item) => item.text && /(?:自选|ETF|LOF|基金|(?:^|\n)(?:sh|sz)?\d{6}(?:\n|$))/i.test(item.text))
+    .slice(0, 500);
   return JSON.stringify({
     url: location.href,
     title: document.title,
     text,
     tables,
     virtualRows,
+    watchNodes,
     localStorage: storage(localStorage),
     sessionStorage: storage(sessionStorage),
   });

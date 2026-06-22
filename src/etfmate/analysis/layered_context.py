@@ -50,7 +50,7 @@ def build_layered_context(
     layers = [
         _market_layer(market),
         _research_layer(),
-        _signal_layer(position, all_positions or []),
+        _signal_layer(position, all_positions or [], market),
         _capital_layer(market),
         _news_layer(),
         _fundamental_layer(),
@@ -158,11 +158,11 @@ def _research_layer() -> LayerEvidence:
     return _missing_layer("research", "研报预期层", "尚未接入 a-stock-data 研报/一致预期适配器")
 
 
-def _signal_layer(position: Position | None, positions: list[Position]) -> LayerEvidence:
-    if not position:
-        return _missing_layer("signal", "热点信号层", "无持仓名称，暂无法做主题重合启发式；尚未接入热点/北向/板块接口")
-    theme = _theme_key(position.name)
-    peers = [item for item in positions if item.code != position.code and _theme_key(item.name) == theme] if theme else []
+def _signal_layer(position: Position | None, positions: list[Position], market: MarketSnapshot) -> LayerEvidence:
+    name = position.name if position else market.name
+    theme = _theme_key(name)
+    current_code = position.code if position else market.code
+    peers = [item for item in positions if item.code != current_code and _theme_key(item.name) == theme] if theme else []
     if peers:
         names = "、".join(f"{item.code} {item.name}" for item in peers[:3])
         return LayerEvidence(

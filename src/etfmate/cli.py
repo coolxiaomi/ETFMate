@@ -21,7 +21,7 @@ from etfmate.browser import ths_account, touker_grid
 from etfmate.browser.session import LoginRequiredError, WebAccessNotReadyError, require_web_access_proxy
 from etfmate.market.providers import build_market_snapshot, normalize_etf_code
 from etfmate.report.daily_report import write_report
-from etfmate.storage.models import GridConfig, Position, Trade
+from etfmate.storage.models import GridConfig, Position, Trade, WatchItem
 from etfmate.storage.repository import read_json, run_id_str, write_json
 
 
@@ -97,11 +97,17 @@ def run_analyze(root: Path, run_id: str) -> None:
     positions = [_position(item) for item in _items(account, "positions")]
     trades = [_trade(item) for item in _items(account, "trades")]
     grids = [_grid(item) for item in _items(grid_payload, "grids")]
+    watchlist, watchlist_filtered = _watchlist_from_account(account)
     _require_items({"positions": positions}, "positions", "缺少同花顺持仓数据，不能生成实时分析。")
     _require_items({"grids": grids}, "grids", "缺少 Touker 网格数据，不能生成实时分析。")
 
-    codes = sorted({*[item.code for item in positions], *[item.code for item in trades], *[item.code for item in grids]})
+    codes = sorted({*[item.code for item in positions], *[item.code for item in trades], *[item.code for item in grids], *[item.code for item in watchlist]})
     snapshots = [build_market_snapshot(code) for code in codes]
+    watch_by_code = {item.code: item for item in watchlist}
+    for snapshot in snapshots:
+        watch = watch_by_code.get(snapshot.code)
+        if watch and _prefer_name(snapshot.name, watch.name, snapshot.code) == watch.name:
+            snapshot.name = watch.name
     snapshots_by_code = {item.code: item for item in snapshots}
     positions_by_code = {item.code: item for item in positions}
     grids_by_code = {item.code: item for item in grids}
@@ -117,6 +123,7 @@ def run_analyze(root: Path, run_id: str) -> None:
             all_positions=positions,
             all_markets=snapshots,
             layered_context=layered_contexts.get(item.code),
+            watch_item=watch_by_code.get(item.code),
         )
         for item in snapshots
     ]
@@ -142,6 +149,10 @@ def run_analyze(root: Path, run_id: str) -> None:
         "analysis_time": _analysis_time(run_id),
         "positions_count": len(positions),
         "grids_count": len(grids),
+        "watchlist_count": len(watchlist),
+        "watchlist_filtered_count": len(watchlist_filtered),
+        "watchlist": watchlist,
+        "watchlist_filtered_out": watchlist_filtered,
         "market_snapshots": snapshots,
         "layered_contexts": {code: context_to_dict(context) for code, context in layered_contexts.items()},
         "recommendations": recommendations,
@@ -173,6 +184,7 @@ def run_report(root: Path, run_id: str) -> None:
 
     positions_count = len(_items(account, "positions"))
     trades_count = len(_items(account, "trades"))
+    watchlist, watchlist_filtered = _watchlist_from_account(account)
     grids_list = _items(grid_payload, "grids")
     grids_count = len(grids_list)
     grids_active = sum(1 for g in grids_list if _bool(_pick(g, "enabled", "启用", default=True)))
@@ -187,6 +199,12 @@ def run_report(root: Path, run_id: str) -> None:
         "items": [
             {"label": "同花顺持仓", "count": str(positions_count), "source": "同花顺投资账本", "note": "完整" if positions_count else "无数据"},
             {"label": "同花顺交易记录", "count": f"{trades_count} 笔", "source": "同花顺投资账本", "note": "完整" if trades_count else "无数据"},
+            {
+                "label": "同花顺自选ETF池",
+                "count": f"{len(watchlist)} 只，过滤 {len(watchlist_filtered)} 条",
+                "source": "同花顺投资账本自选页/缓存/DOM",
+                "note": "仅保留 ETF、LOF、场内基金；过滤股票、可转债、港股股票和非 ETF 标的",
+            },
             {"label": "Touker 网格", "count": f"{grids_count}（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker", "note": "完整" if grids_count else "无数据"},
             {"label": "行情/K 线", "count": f"{len(snapshots)} 只", "source": "; ".join(sorted(sources)) or "N/A", "note": "由 a-stock-data/本地行情适配器决策"},
             {
@@ -320,6 +338,45 @@ def _grid(raw: dict) -> GridConfig:
         max_position_quantity=_maybe_num(_pick(raw, "max_position_quantity", "maxPositionQuantity", "最大持仓", default=None)),
         last_trigger_time=str(_pick(raw, "last_trigger_time", "最近触发时间", default="")),
     )
+
+
+def _watch_item(raw: dict) -> WatchItem:
+    code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "securityCode", "证券代码", "代码")))
+    return WatchItem(
+        code=code,
+        name=str(_pick(raw, "name", "stock_name", "securityName", "stockName", "证券名称", "名称", default=code)),
+        source=str(_pick(raw, "source", default="ths_watchlist")),
+        raw_type=_text(_pick(raw, "raw_type", "type", "securityType", default="")),
+        include_reason=_text(_pick(raw, "include_reason", default="")),
+        source_key=_text(_pick(raw, "source_key", default="")),
+    )
+
+
+def _watchlist_from_account(account: dict) -> tuple[list[WatchItem], list[dict]]:
+    watch_items = _items(account, "watchlist")
+    filtered = _items(account, "watchlist_filtered_out")
+    if not watch_items and isinstance(account, dict) and isinstance(account.get("snapshot"), dict):
+        watch_items, filtered = ths_account.extract_watchlist(account["snapshot"])
+    return [_watch_item(item) for item in watch_items], [item for item in filtered if isinstance(item, dict)]
+
+
+def _prefer_name(current: str, candidate: str, code: str) -> str:
+    current_text = str(current or "").strip()
+    candidate_text = str(candidate or "").strip()
+    if _human_name(current_text, code):
+        return current_text
+    if _human_name(candidate_text, code):
+        return candidate_text
+    return current_text or candidate_text or code
+
+
+def _human_name(value: str, code: str) -> bool:
+    text = str(value or "").strip()
+    if not text or text == code:
+        return False
+    if text.lower() in {code.lower(), f"{code}.sh", f"{code}.sz", f"sh{code}", f"sz{code}"}:
+        return False
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
 
 def _pick(raw: dict, *names: str, default: Any = None) -> Any:

@@ -14,12 +14,13 @@ ETFMate 是本地实时 ETF 持仓与网格交易辅助分析工具。当前采�
 ## 推荐流程
 
 1. 加载 `$web-access`，运行其前置检查并确认 Proxy 可用。
-2. 打开同花顺投资账本：`https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO`。
-3. 打开 Touker 网格页：`https://m.touker.com/fd/conditions/monitoring`。
-4. 用 `/eval` 读取 DOM、表格、页面文本、storage 和已加载结构化数据，用 `/screenshot` 留存证据。
-5. 保存原始快照到 `data/raw/ths/RUN_ID/` 和 `data/raw/touker/RUN_ID/`。
-6. 调用行情/指标和七层证据分析，输出 `data/raw/market/RUN_ID/analysis.json`。
-7. 生成 `data/reports/RUN_ID-etf-realtime.html`。
+2. 打开同花顺投资账本持仓/交易页：`https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO`。
+3. 打开同花顺投资账本自选 ETF 池页：`https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/ISUeEwK`。
+4. 打开 Touker 网格页：`https://m.touker.com/fd/conditions/monitoring`。
+5. 用 `/eval` 读取 DOM、表格、页面文本、storage 和已加载结构化数据，用 `/screenshot` 留存证据。
+6. 保存原始快照到 `data/raw/ths/RUN_ID/` 和 `data/raw/touker/RUN_ID/`。
+7. 调用行情/指标和七层证据分析，输出 `data/raw/market/RUN_ID/analysis.json`。
+8. 生成 `data/reports/RUN_ID-etf-realtime.html`。
 
 命令入口：
 

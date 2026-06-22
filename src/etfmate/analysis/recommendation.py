@@ -4,7 +4,7 @@ from typing import Any
 
 from etfmate.analysis.layered_context import LayeredContext, normalize_context
 from etfmate.analysis.rule_engine import decide_position
-from etfmate.storage.models import GridConfig, MarketSnapshot, Position
+from etfmate.storage.models import GridConfig, MarketSnapshot, Position, WatchItem
 
 
 def recommend(
@@ -14,6 +14,7 @@ def recommend(
     all_positions: list[Position] | None = None,
     all_markets: list[MarketSnapshot] | None = None,
     layered_context: LayeredContext | dict[str, Any] | None = None,
+    watch_item: WatchItem | None = None,
 ) -> dict:
     action = "持有"
     reasons: list[str] = []
@@ -40,6 +41,7 @@ def recommend(
     hard_weak = bool(market.ma20 and market.ma60 and market.last_price < market.ma20 and market.last_price < market.ma60)
     soft_weak = bool(market.ma60 and market.last_price < market.ma60)
     rule_decision = decide_position(position, grid, market, all_positions or [], all_markets or [])
+    source = _candidate_source(position, grid, watch_item)
 
     if boll_pos is not None:
         scores.append(f"BOLL分位 {boll_pos:.0%}")
@@ -51,6 +53,8 @@ def recommend(
         scores.append(f"VOL5/20 {market.vol_ma5 / market.vol_ma20:.2f}倍")
 
     if not position:
+        if watch_item:
+            reasons.append("来自同花顺自选 ETF 池，纳入建仓/等待观察队列")
         if low_zone and not hard_weak:
             action = "买入"
             reasons.append("无当前持仓且价格进入低位区，可按单格小仓位试探")
@@ -149,11 +153,15 @@ def recommend(
     action = _merge_rule_action(action, rule_decision)
     reasons = list(dict.fromkeys(rule_decision.get("reasons", []) + reasons))
     risks = list(dict.fromkeys((rule_decision.get("risks") or []) + risks))
-    action_quantity, position_plan = _action_plan(action, position, grid)
+    action_quantity, position_plan = _action_plan(action, position, grid, rule_decision)
     reasons = _clean_reasons_for_action(action, reasons)
     return {
         "code": market.code,
         "name": market.name,
+        "candidate_source": source,
+        "is_watchlist_candidate": bool(watch_item),
+        "watchlist_source_key": watch_item.source_key if watch_item else None,
+        "watchlist_include_reason": watch_item.include_reason if watch_item else None,
         "quantity": position.quantity if position else None,
         "available_quantity": position.available_quantity if position else None,
         "market_value": position.market_value if position else None,
@@ -202,6 +210,7 @@ def recommend(
         "action": action,
         "action_quantity": action_quantity,
         "position_plan": position_plan,
+        "entry_plan": _entry_plan(market, action, rule_decision, bool(watch_item) and not position),
         "reasons": reasons,
         "risks": risks or ["暂无明显新增风险"],
         "watch_price": _watch_price(market),
@@ -215,6 +224,7 @@ def recommend(
         "rule_momentum_score": rule_decision.get("momentum_score"),
         "rule_risk_score": rule_decision.get("risk_score"),
         "rule_filter_status": rule_decision.get("filter_status"),
+        "target_position_pct": rule_decision.get("target_position_pct"),
     }
 
 
@@ -293,15 +303,32 @@ def _boll_position(market: MarketSnapshot) -> float | None:
     return (market.last_price - market.boll_lower) / (market.boll_upper - market.boll_lower)
 
 
-def _action_plan(action: str, position: Position | None, grid: GridConfig | None) -> tuple[float | None, str]:
+def _candidate_source(position: Position | None, grid: GridConfig | None, watch_item: WatchItem | None) -> str:
+    if position and watch_item:
+        return "持仓+自选ETF池"
+    if position:
+        return "同花顺持仓"
+    if watch_item and grid:
+        return "自选ETF池+Touker网格"
+    if watch_item:
+        return "自选ETF池"
+    if grid:
+        return "Touker网格"
+    return "行情池"
+
+
+def _action_plan(action: str, position: Position | None, grid: GridConfig | None, rule_decision: dict[str, Any] | None = None) -> tuple[float | None, str]:
     quantity = position.quantity if position else None
     grid_qty = grid.order_quantity if grid else None
+    target_pct = _num_or_zero((rule_decision or {}).get("target_position_pct"))
     if not position:
         if action in {"买入", "分批买入"}:
-            return grid_qty or 100, "无当前持仓，只适合按单格小仓位试探"
+            target_text = f"，目标仓位约 {target_pct:.1f}%" if target_pct else ""
+            return grid_qty or 100, f"无当前持仓{target_text}；首笔只做目标仓位的约1/3或单格小仓位，后续按信号分批"
         if action in {"观察", "禁止交易"}:
-            return None, "无当前持仓，暂不新开仓"
-        return None, "无当前持仓"
+            target_text = f"，规则目标仓位约 {target_pct:.1f}%" if target_pct else ""
+            return None, f"无当前持仓{target_text}；当前暂不新开仓，等待入场条件"
+        return None, "无当前持仓，先纳入观察池"
     if action == "禁止交易":
         return None, "触发硬过滤条件，本次不新增交易动作"
     if action == "观察":
@@ -324,6 +351,27 @@ def _action_plan(action: str, position: Position | None, grid: GridConfig | None
     if action in {"暂停网格", "暂停买入侧"}:
         return 0, "暂停买入侧；已有持仓保留底仓，优先等趋势修复"
     return None, "维持当前仓位，按网格纪律执行"
+
+
+def _entry_plan(market: MarketSnapshot, action: str, rule_decision: dict[str, Any], watch_only: bool) -> str:
+    target_pct = _num_or_zero(rule_decision.get("target_position_pct"))
+    target_text = f"目标仓位 {target_pct:.1f}%" if target_pct else "目标仓位待规则确认"
+    refs = []
+    if market.ma20:
+        refs.append(f"MA20 {market.ma20:.3f}")
+    if market.boll_mid:
+        refs.append(f"BOLL中轨 {market.boll_mid:.3f}")
+    if market.boll_lower:
+        refs.append(f"BOLL下轨 {market.boll_lower:.3f}")
+    ref_text = "，参考 " + " / ".join(refs) if refs else "，等待补齐 K 线参考价"
+    if action in {"买入", "分批买入", "分批加仓"}:
+        prefix = "未持仓建仓" if watch_only else "加仓"
+        return f"{prefix}: {target_text}，首笔不超过目标的1/3{ref_text}；不在明显远离 MA20 时追价"
+    if action in {"观察", "持有"} and watch_only:
+        return f"等待: {target_text}{ref_text}，等趋势修复或回踩确认后再建仓"
+    if action in {"禁止交易"}:
+        return "触发硬过滤，本次不设入场价"
+    return f"{target_text}{ref_text}"
 
 
 def _round_lot(value: float) -> float:

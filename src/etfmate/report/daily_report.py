@@ -208,6 +208,7 @@ def _title_meta(item: dict | None, grid: dict | None) -> str:
     if not item:
         return " · 未出现在当前持仓分析中"
     parts = [
+        str(item.get("candidate_source") or ""),
         f"现价 {_num(item.get('last_price'), 3)}",
         f"涨跌 {_signed_pct(item.get('pct_chg'))}" if item.get("pct_chg") is not None else "",
     ]
@@ -219,11 +220,21 @@ def _title_meta(item: dict | None, grid: dict | None) -> str:
                 f"浮盈亏 {_color_number(item.get('pnl_pct'), suffix='%')}",
             ]
         )
+    else:
+        parts.extend(["未持仓", f"目标仓位 {_pct(item.get('target_position_pct'))}"])
     parts.append("网格启用" if grid else "无网格")
     return " · " + "；".join(part for part in parts if part)
 
 
 def _holding_summary(item: dict) -> str:
+    if item.get("quantity") is None:
+        return "；".join(
+            [
+                "未持仓",
+                _cell(item.get("candidate_source")),
+                f"目标仓位 {_pct(item.get('target_position_pct'))}",
+            ]
+        )
     return "；".join(
         [
             f"数量 {_num(item.get('quantity'), 0)}",
@@ -234,6 +245,14 @@ def _holding_summary(item: dict) -> str:
 
 
 def _price_summary(item: dict) -> str:
+    if item.get("quantity") is None:
+        return "；".join(
+            [
+                f"现价 {_num(item.get('last_price'), 3)}",
+                f"涨跌 {_signed_pct(item.get('pct_chg'))}" if item.get("pct_chg") is not None else "涨跌 -",
+                _cell(item.get("watchlist_include_reason")),
+            ]
+        )
     return "；".join(
         [
             f"成本 {_num(item.get('cost_price'), 3)}",
@@ -389,10 +408,12 @@ def _bias_alert(item: dict) -> str:
 def _action_merged_html(item: dict) -> str:
     parts = [
         _action_text(item),
+        _inline_label("来源", item.get("candidate_source")),
         _inline_label("过滤", item.get("rule_filter_status")),
         _inline_label("备注", item.get("investor_note")),
         _inline_label("仓位占比", _position_text(item)),
         _inline_label("执行", item.get("position_plan")),
+        _inline_label("建仓/等待", item.get("entry_plan")),
         _inline_label("依据", "；".join(_filtered_action_reasons(item))),
     ]
     return _join_html(parts)
@@ -431,6 +452,7 @@ def _overview_html(item: dict) -> str:
     return _join_html(
         [
             _inline_label("观察", item.get("watch_price")),
+            _inline_label("建仓计划", item.get("entry_plan")),
             f'<span class="{cls}">{escape(risk_text)}</span>',
         ]
     )
@@ -496,6 +518,10 @@ def _filtered_action_reasons(item: dict) -> list[str]:
 
 
 def _position_text(item: dict) -> str:
+    if item.get("quantity") is None:
+        tier = _cell(item.get("position_tier"))
+        target = _pct(item.get("target_position_pct"))
+        return f"未持仓，{tier}，目标仓位 {target}"
     tier = _cell(item.get("position_tier"))
     pct = _pct(item.get("position_pct"))
     value = _num(item.get("market_value"), 2)

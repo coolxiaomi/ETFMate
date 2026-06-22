@@ -21,6 +21,16 @@ class Position:
 
 
 @dataclass
+class WatchItem:
+    code: str
+    name: str
+    source: str = "ths_watchlist"
+    raw_type: str | None = None
+    include_reason: str | None = None
+    source_key: str | None = None
+
+
+@dataclass
 class Trade:
     trade_date: str
     trade_time: str | None
