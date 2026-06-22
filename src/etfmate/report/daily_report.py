@@ -89,10 +89,16 @@ def _etf_view(item: dict) -> dict[str, Any]:
     name = item.get("name") or code
     action = str(rec.get("action") if rec else "无持仓建议")
     grid_action = str(grid.get("action") if grid else "无网格")
+    nav = _nav_signal(action, grid_action, rec)
     return {
         "id": f"etf-{_anchor(code)}",
         "code": code,
         "name": str(name),
+        "nav_action": nav["action"],
+        "nav_action_class": nav["action_class"],
+        "nav_heat": nav["heat"],
+        "nav_heat_class": nav["heat_class"],
+        "nav_meta": nav["meta"],
         "title_meta": _title_meta(rec, grid),
         "action_pill": _pill(f"持仓动作：{_display_action(action)}", _action_class(action)),
         "grid_pill": _pill(f"网格动作：{_display_action(grid_action)}", _grid_action_class(grid_action)),
@@ -732,6 +738,62 @@ def _grid_action_class(action: str) -> str:
     if any(word in action for word in ("调宽", "调窄", "调整", "降低")):
         return "warn"
     return "neutral"
+
+
+def _nav_signal(action: str, grid_action: str, item: dict | None) -> dict[str, str]:
+    display_action = _compact_action(_display_action(action))
+    heat = "平"
+    heat_class = "heat-flat"
+    action_class = _action_class(action)
+    text = f"{action} {grid_action}"
+    risk_score = _float_or_none((item or {}).get("rule_risk_score"))
+    filter_status = str((item or {}).get("rule_filter_status") or "")
+    if "禁止" in text or "暂停" in text or filter_status == "禁止交易" or (risk_score is not None and risk_score >= 80):
+        heat, heat_class = "寒", "heat-cold"
+    elif any(word in text for word in ("卖出", "减仓", "降低")) or (risk_score is not None and risk_score >= 65):
+        heat, heat_class = "凉", "heat-cool"
+    elif any(word in action for word in ("买入", "加仓", "建仓", "分批")):
+        heat, heat_class = "热", "heat-hot"
+    elif any(word in action for word in ("观察", "等待", "试探")):
+        heat, heat_class = "温", "heat-warm"
+    meta = _nav_meta(item)
+    return {"heat": heat, "heat_class": heat_class, "action": display_action, "action_class": action_class, "meta": meta}
+
+
+def _compact_action(action: str) -> str:
+    if "暂停" in action:
+        return "暂停买入"
+    if "分批买入" in action:
+        return "分批加仓"
+    if "买入" in action or "加仓" in action:
+        return "加仓"
+    if "建仓" in action:
+        return "建仓"
+    if "减仓" in action:
+        return "减仓"
+    if "卖出" in action:
+        return "卖出"
+    if "观察" in action or "等待" in action:
+        return "等待"
+    if "持有" in action:
+        return "持有"
+    return action if action and action != "-" else "待定"
+
+
+def _nav_meta(item: dict | None) -> str:
+    if not item:
+        return "无持仓建议"
+    parts = []
+    position_pct = item.get("position_pct")
+    target_pct = item.get("target_position_pct")
+    if position_pct is not None:
+        parts.append(f"{_pct(position_pct)}")
+    elif target_pct is not None:
+        parts.append(f"目标 {_pct(target_pct)}")
+    pct_chg = item.get("pct_chg")
+    if pct_chg is not None:
+        parts.append(_signed_pct(pct_chg))
+    return " · ".join(part for part in parts if part) or _cell(item.get("position_tier"))
 
 
 def _period_label(value: Any) -> str:

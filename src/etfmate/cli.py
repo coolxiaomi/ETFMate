@@ -184,6 +184,7 @@ def run_report(root: Path, run_id: str) -> None:
 
     positions_count = len(_items(account, "positions"))
     trades_count = len(_items(account, "trades"))
+    closed_count = len(_items(account, "closed_positions"))
     watchlist, watchlist_filtered = _watchlist_from_account(account)
     grids_list = _items(grid_payload, "grids")
     grids_count = len(grids_list)
@@ -198,7 +199,13 @@ def run_report(root: Path, run_id: str) -> None:
     data_completeness = {
         "items": [
             {"label": "同花顺持仓", "count": str(positions_count), "source": "同花顺投资账本", "note": "完整" if positions_count else "无数据"},
-            {"label": "同花顺交易记录", "count": f"{trades_count} 笔", "source": "同花顺投资账本", "note": "完整" if trades_count else "无数据"},
+            {"label": "同花顺已清仓", "count": f"{closed_count} 条", "source": "同花顺投资账本已清仓 tab", "note": "滚动采集完整" if closed_count else "无数据"},
+            {
+                "label": "同花顺交易记录",
+                "count": f"{trades_count} 笔",
+                "source": "同花顺投资账本交易记录 tab",
+                "note": "覆盖本月、近三月、近半年、今年、自定义并滚动采集" if trades_count else "无数据",
+            },
             {
                 "label": "同花顺自选ETF池",
                 "count": f"{len(watchlist)} 只，过滤 {len(watchlist_filtered)} 条",

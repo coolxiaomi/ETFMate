@@ -18,9 +18,12 @@ def advise_grid(
     current_step = grid.grid_step_pct or _avg(grid.buy_fall_pct, grid.sell_rise_pct)
     suggested_buy_fall = _round_pct(_clamp((market.atr14_pct or current_step or 5.0) * 0.9, 2.0, 8.0))
     suggested_sell_rise = _round_pct(_clamp((market.atr14_pct or current_step or 5.0) * 0.8, 2.0, 8.0))
-    current_qty = grid.order_quantity or grid.grid_step_amount or 0
-    suggested_buy_qty = current_qty
-    suggested_sell_qty = current_qty
+    current_qty = grid.order_quantity or grid.buy_quantity or grid.sell_quantity or grid.grid_step_amount or 0
+    base_lot_qty = _round_qty(current_qty or 100)
+    suggested_buy_qty = base_lot_qty
+    suggested_sell_qty = base_lot_qty
+    if current_qty and current_qty != base_lot_qty:
+        reasons.append("网格条件单委托股数必须至少 100 股且为 100 的倍数，建议按一手倍数修正")
 
     position_weight = position.position_pct if position and position.position_pct is not None else 0
     hard_weak = bool(market.ma20 and market.ma60 and market.last_price < market.ma20 and market.last_price < market.ma60)
@@ -52,7 +55,7 @@ def advise_grid(
         reasons = [reason for reason in reasons if "网格间距" not in reason]
         reasons.append("价格同时低于 MA20/MA60，且仓位或亏损压力不低；含义是买入侧不再触发，卖出侧纪律保留，不是关闭整个条件单")
         suggested_buy_qty = 0
-        suggested_sell_qty = current_qty
+        suggested_sell_qty = base_lot_qty
         suggested_buy_fall = grid.buy_fall_pct
         suggested_sell_rise = grid.sell_rise_pct
     elif reduce_buy_side:
@@ -85,7 +88,7 @@ def advise_grid(
         if rule_action in {"禁止交易", "卖出"}:
             action = "暂停买入侧"
             suggested_buy_qty = 0
-            suggested_sell_qty = current_qty
+            suggested_sell_qty = base_lot_qty
             suggested_buy_fall = grid.buy_fall_pct
             suggested_sell_rise = grid.sell_rise_pct
             reasons.append("规则引擎触发禁止交易/退出信号，网格买入侧先停用")

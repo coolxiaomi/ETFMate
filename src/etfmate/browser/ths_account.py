@@ -12,6 +12,10 @@ from .session import WebAccessSession, ensure_login, require_login
 THS_POSITION_URL = "https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO"
 THS_WATCHLIST_URL = "https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/ISUeEwK"
 THS_URL = THS_POSITION_URL
+THS_POSITION_TAB = "持仓列表"
+THS_CLOSED_TAB = "已清仓"
+THS_TRADES_TAB = "交易记录"
+THS_TRADE_RANGE_TABS = ("本月", "近三月", "近半年", "今年", "自定义")
 
 
 def ths_login_check(session: WebAccessSession) -> bool:
@@ -37,30 +41,48 @@ def collect(root: Path, out_dir: Path) -> dict:
         out_dir.mkdir(parents=True, exist_ok=True)
         session.screenshot(out_dir / "account_preload.png")
         time.sleep(2)
-        snapshot = _wait_for_positions_snapshot(session)
-        if not _position_records_from_text(str(snapshot.get("text", ""))):
-            time.sleep(2)
-        snapshot = _as_dict(session.eval(_SNAPSHOT_JS))
+        snapshot = _collect_tab_snapshot(session, THS_POSITION_TAB, out_dir / "positions")
         (out_dir / "account_snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         (out_dir / "account_text.txt").write_text(str(snapshot.get("text", "")), encoding="utf-8")
         session.screenshot(out_dir / "account.png")
 
+        closed_snapshot = _collect_tab_snapshot(session, THS_CLOSED_TAB, out_dir / "closed_positions")
+
+        trade_snapshots: dict[str, dict[str, Any]] = {}
+        _click_tab(session, THS_TRADES_TAB)
+        for range_tab in THS_TRADE_RANGE_TABS:
+            trade_snapshots[range_tab] = _collect_tab_snapshot(session, range_tab, out_dir / f"trades_{_safe_name(range_tab)}")
+
         session.navigate(THS_WATCHLIST_URL)
         time.sleep(2)
         session.screenshot(out_dir / "watchlist_preload.png")
-        watchlist_snapshot = _wait_for_watchlist_snapshot(session)
-        if not _watchlist_candidates_from_snapshot(watchlist_snapshot):
-            time.sleep(2)
-        watchlist_snapshot = _as_dict(session.eval(_SNAPSHOT_JS))
+        watchlist_snapshot = _collect_scroll_loaded_snapshot(session, "自选ETF池")
         (out_dir / "watchlist_snapshot.json").write_text(json.dumps(watchlist_snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         (out_dir / "watchlist_text.txt").write_text(str(watchlist_snapshot.get("text", "")), encoding="utf-8")
         session.screenshot(out_dir / "watchlist.png")
+        (out_dir / "ths_tabs_snapshot.json").write_text(
+            json.dumps(
+                {
+                    "positions": snapshot,
+                    "closed_positions": closed_snapshot,
+                    "trade_records": trade_snapshots,
+                    "watchlist": watchlist_snapshot,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     records = _position_records_from_text(str(snapshot.get("text", "")))
     records.extend(_records_from_snapshot(snapshot))
+    closed_records = _records_from_snapshot(closed_snapshot)
+    trade_records: list[dict] = []
+    for trade_snapshot in trade_snapshots.values():
+        trade_records.extend(_records_from_snapshot(trade_snapshot))
     positions = _dedupe(_extract_records(records, _looks_like_position), "code", "证券代码", "symbol", "名称")
     trades = _dedupe(
-        _extract_records(records, _looks_like_trade),
+        _extract_records(trade_records, _looks_like_trade),
         "trade_id",
         "成交编号",
         "entrust_no",
@@ -73,6 +95,7 @@ def collect(root: Path, out_dir: Path) -> dict:
         "quantity",
         "成交数量",
     )
+    closed_positions = _dedupe(_extract_records(closed_records, _looks_like_closed_position), "code", "证券代码", "symbol", "名称")
     watchlist, filtered = extract_watchlist(watchlist_snapshot)
     watchlist_source_url = str(watchlist_snapshot.get("url") or THS_WATCHLIST_URL)
     if not watchlist:
@@ -81,7 +104,7 @@ def collect(root: Path, out_dir: Path) -> dict:
     return {
         "positions": positions,
         "trades": trades,
-        "closed_positions": [],
+        "closed_positions": closed_positions,
         "watchlist": watchlist,
         "watchlist_filtered_out": filtered,
         "watchlist_stats": {
@@ -92,6 +115,8 @@ def collect(root: Path, out_dir: Path) -> dict:
             "note": "优先从同花顺投资账本自选页提取 ETF 池；自选页无结果时才退回持仓页缓存/DOM，按 ETF/LOF/场内基金规则过滤",
         },
         "snapshot": snapshot,
+        "closed_snapshot": closed_snapshot,
+        "trade_snapshots": trade_snapshots,
         "watchlist_snapshot": watchlist_snapshot,
     }
 
@@ -114,26 +139,54 @@ def extract_watchlist(snapshot: dict[str, Any]) -> tuple[list[dict], list[dict]]
     return _dedupe(included, "code"), _dedupe(filtered, "code", "filter_reason")
 
 
-def _wait_for_positions_snapshot(session: WebAccessSession, timeout_seconds: int = 30) -> dict[str, Any]:
-    deadline = time.monotonic() + timeout_seconds
-    latest: dict[str, Any] = {}
-    while time.monotonic() < deadline:
-        latest = _as_dict(session.eval(_SNAPSHOT_JS))
-        if _position_records_from_text(str(latest.get("text", ""))):
-            return latest
-        time.sleep(1)
-    return latest
+def _collect_tab_snapshot(session: WebAccessSession, tab_label: str, evidence_dir: Path) -> dict[str, Any]:
+    clicked = _click_tab(session, tab_label)
+    snapshot = _collect_scroll_loaded_snapshot(session, tab_label)
+    snapshot["tab_label"] = tab_label
+    snapshot["tab_clicked"] = clicked
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / "snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    (evidence_dir / "text.txt").write_text(str(snapshot.get("text", "")), encoding="utf-8")
+    session.screenshot(evidence_dir / "screen.png")
+    return snapshot
 
 
-def _wait_for_watchlist_snapshot(session: WebAccessSession, timeout_seconds: int = 30) -> dict[str, Any]:
+def _click_tab(session: WebAccessSession, tab_label: str, timeout_seconds: int = 20) -> bool:
     deadline = time.monotonic() + timeout_seconds
-    latest: dict[str, Any] = {}
     while time.monotonic() < deadline:
+        result = session.eval(_click_tab_js(tab_label))
+        if str(result).lower() in {"true", "1"} or result is True:
+            time.sleep(1)
+            return True
+        time.sleep(0.5)
+    raise RuntimeError(f"同花顺页面未找到或无法点击 tab：{tab_label}")
+
+
+def _collect_scroll_loaded_snapshot(session: WebAccessSession, label: str, max_steps: int = 36) -> dict[str, Any]:
+    snapshots: list[dict[str, Any]] = []
+    seen_signatures: set[str] = set()
+    stable_steps = 0
+    latest: dict[str, Any] = {}
+    for step in range(max_steps):
         latest = _as_dict(session.eval(_SNAPSHOT_JS))
-        if _watchlist_candidates_from_snapshot(latest):
-            return latest
-        time.sleep(1)
-    return latest
+        latest["scroll_step"] = step
+        signature = _snapshot_signature(latest)
+        if signature in seen_signatures:
+            stable_steps += 1
+        else:
+            stable_steps = 0
+            seen_signatures.add(signature)
+            snapshots.append(latest)
+        scroll_result = _as_dict(session.eval(_SCROLL_JS))
+        if not scroll_result.get("moved") and stable_steps >= 2:
+            break
+        time.sleep(0.35)
+    if not snapshots:
+        snapshots.append(latest)
+    merged = _merge_snapshots(snapshots)
+    merged["scroll_label"] = label
+    merged["scroll_steps"] = len(snapshots)
+    return merged
 
 
 def _records_from_snapshot(snapshot: dict[str, Any]) -> list[dict]:
@@ -147,6 +200,8 @@ def _records_from_snapshot(snapshot: dict[str, Any]) -> list[dict]:
             records.append(record)
     for row_text in snapshot.get("virtualRows") or []:
         records.extend(_position_records_from_text(str(row_text)))
+        records.extend(_trade_records_from_text(str(row_text)))
+    records.extend(_trade_records_from_text(str(snapshot.get("text") or "")))
     for value in (snapshot.get("localStorage") or {}).values():
         records.extend(_json_records(value))
     for value in (snapshot.get("sessionStorage") or {}).values():
@@ -400,6 +455,13 @@ def _looks_like_trade(item: dict) -> bool:
     return has_code and has_side and has_price
 
 
+def _looks_like_closed_position(item: dict) -> bool:
+    text = json.dumps(item, ensure_ascii=False)
+    has_code = any(_is_code(item.get(key)) for key in ("code", "symbol", "stockCode", "zqdm", "证券代码", "代码"))
+    has_closed_text = any(word in text for word in ("清仓", "已清仓", "累计盈亏", "清仓收益", "卖出", "收益率"))
+    return has_code and has_closed_text
+
+
 def _is_code(value: Any) -> bool:
     return bool(re.fullmatch(r"(sh|sz)?\d{6}", str(value or "").strip().lower()))
 
@@ -416,6 +478,112 @@ def _dedupe(items: list[dict], *keys: str) -> list[dict]:
         seen.add(identity)
         result.append(item)
     return result
+
+
+def _trade_records_from_text(text: str) -> list[dict]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    records: list[dict] = []
+    for idx, line in enumerate(lines):
+        if not _is_code(line):
+            continue
+        next_idx = next((pos for pos in range(idx + 1, len(lines)) if _is_code(lines[pos])), min(len(lines), idx + 16))
+        window = lines[idx:next_idx]
+        block = "\n".join(window)
+        if not any(word in block for word in ("买入", "卖出", "申购", "赎回", "成交")):
+            continue
+        numeric_text = "\n".join(
+            item
+            for item in window
+            if not _is_code(item)
+            and not re.fullmatch(r"20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}", item)
+            and not re.fullmatch(r"\d{1,2}:\d{2}(?::\d{2})?", item)
+        )
+        nums = [item.replace(",", "") for item in re.findall(r"(?<!\d)[+-]?\d+(?:\.\d+)?(?!\d)", numeric_text)]
+        side = next((word for word in ("买入", "卖出", "申购", "赎回") if word in block), "")
+        date_match = re.search(r"20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}", block)
+        time_match = re.search(r"\d{1,2}:\d{2}(?::\d{2})?", block)
+        records.append(
+            {
+                "code": _normalize_code(line),
+                "name": window[1] if len(window) > 1 and not _looks_like_number(window[1]) else line,
+                "side": side,
+                "trade_date": date_match.group(0).replace("/", "-").replace(".", "-") if date_match else "",
+                "trade_time": time_match.group(0) if time_match else "",
+                "price": nums[0] if nums else "",
+                "quantity": nums[1] if len(nums) > 1 else "",
+                "amount": nums[2] if len(nums) > 2 else "",
+                "raw_text": block,
+            }
+        )
+    return records
+
+
+def _snapshot_signature(snapshot: dict[str, Any]) -> str:
+    text = str(snapshot.get("text") or "")
+    code_count = len(re.findall(r"(?<!\d)(?:sh|sz)?\d{6}(?!\d)", text, flags=re.I))
+    table_rows = sum(len(table.get("rows") or []) for table in snapshot.get("tables") or [] if isinstance(table, dict))
+    return f"{code_count}:{table_rows}:{len(snapshot.get('virtualRows') or [])}:{len(snapshot.get('watchNodes') or [])}:{len(text)}"
+
+
+def _merge_snapshots(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    latest = snapshots[-1]
+    text_parts = _dedupe_text([str(item.get("text") or "") for item in snapshots])
+    tables: list[dict] = []
+    virtual_rows: list[str] = []
+    watch_nodes: list[dict] = []
+    for item in snapshots:
+        tables.extend(item.get("tables") or [])
+        virtual_rows.extend(str(row) for row in item.get("virtualRows") or [])
+        watch_nodes.extend(node for node in item.get("watchNodes") or [] if isinstance(node, dict))
+    return {
+        **latest,
+        "text": "\n".join(text_parts),
+        "tables": _dedupe(tables, "headers", "rows"),
+        "virtualRows": _dedupe_text(virtual_rows),
+        "watchNodes": _dedupe(watch_nodes, "source", "text"),
+        "scroll_snapshots": snapshots,
+    }
+
+
+def _dedupe_text(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = value.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _safe_name(value: str) -> str:
+    mapping = {"本月": "this_month", "近三月": "last_3_months", "近半年": "last_6_months", "今年": "this_year", "自定义": "custom"}
+    return mapping.get(value, re.sub(r"\W+", "_", value))
+
+
+def _click_tab_js(label: str) -> str:
+    label_json = json.dumps(label, ensure_ascii=False)
+    return f"""
+(() => {{
+  const label = {label_json};
+  const visible = (el) => {{
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  }};
+  const candidates = Array.from(document.querySelectorAll("button,[role='tab'],a,li,span,div"))
+    .filter((el) => visible(el))
+    .map((el) => ({{ el, text: (el.innerText || el.textContent || "").trim().replace(/\\s+/g, "") }}))
+    .filter((item) => item.text && (item.text === label || item.text.includes(label)))
+    .sort((a, b) => a.text.length - b.text.length);
+  const target = candidates[0] && candidates[0].el;
+  if (!target) return false;
+  target.scrollIntoView({{ block: "center", inline: "center" }});
+  target.click();
+  return true;
+}})()
+"""
 
 
 _SNAPSHOT_JS = r"""
@@ -449,5 +617,32 @@ _SNAPSHOT_JS = r"""
     localStorage: storage(localStorage),
     sessionStorage: storage(sessionStorage),
   });
+})()
+"""
+
+_SCROLL_JS = r"""
+(() => {
+  const beforeY = window.scrollY || document.documentElement.scrollTop || 0;
+  const candidates = Array.from(document.querySelectorAll("*"))
+    .filter((el) => {
+      const style = getComputedStyle(el);
+      return style.display !== "none" && style.visibility !== "hidden" && el.scrollHeight > el.clientHeight + 40;
+    })
+    .sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
+  let moved = false;
+  const details = [];
+  for (const el of candidates.slice(0, 8)) {
+    const before = el.scrollTop;
+    const delta = Math.max(360, Math.floor(el.clientHeight * 0.85));
+    el.scrollTop = Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + delta);
+    el.dispatchEvent(new Event("scroll", { bubbles: true }));
+    el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: delta }));
+    if (el.scrollTop !== before) moved = true;
+    details.push({ tag: el.tagName, className: String(el.className || "").slice(0, 80), before, after: el.scrollTop, max: el.scrollHeight - el.clientHeight });
+  }
+  window.scrollBy(0, Math.max(360, Math.floor(window.innerHeight * 0.85)));
+  const afterY = window.scrollY || document.documentElement.scrollTop || 0;
+  if (afterY !== beforeY) moved = true;
+  return JSON.stringify({ moved, windowY: afterY, containers: details });
 })()
 """
