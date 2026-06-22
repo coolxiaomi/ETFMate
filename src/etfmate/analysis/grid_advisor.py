@@ -11,6 +11,7 @@ def advise_grid(
     market: MarketSnapshot,
     position: Position | None = None,
     layered_context: LayeredContext | dict[str, Any] | None = None,
+    rule_decision: dict[str, Any] | None = None,
 ) -> dict:
     reasons: list[str] = []
     action = "维持"
@@ -77,6 +78,23 @@ def advise_grid(
         suggested_sell_qty = _round_qty(position.quantity)
         reasons.append("卖出侧建议数量不得超过当前持仓数量，已按持仓上限收敛")
 
+    if rule_decision:
+        rule_action = str(rule_decision.get("action") or "")
+        blocked = set(rule_decision.get("blocked_actions") or [])
+        risk_score = _num_or_zero(rule_decision.get("risk_score"))
+        if rule_action in {"禁止交易", "卖出"}:
+            action = "暂停买入侧"
+            suggested_buy_qty = 0
+            suggested_sell_qty = current_qty
+            suggested_buy_fall = grid.buy_fall_pct
+            suggested_sell_rise = grid.sell_rise_pct
+            reasons.append("规则引擎触发禁止交易/退出信号，网格买入侧先停用")
+        elif rule_action == "减仓" or risk_score >= 70 or {"买入", "加仓", "提高网格买入侧"} & blocked:
+            if action not in {"暂停买入侧", "暂停网格"}:
+                action = "降低买入侧"
+            suggested_buy_qty = _round_qty((suggested_buy_qty or current_qty) * 0.5)
+            reasons.append("规则评分显示风险或流动性约束，买入侧按保守仓位执行")
+
     layer_payload = normalize_context(layered_context)
     if layer_payload:
         confidence = _num_or_zero(layer_payload.get("confidence"))
@@ -108,6 +126,7 @@ def advise_grid(
         "reasons": reasons,
         "layered_confidence": layer_payload.get("confidence") if layer_payload else None,
         "layered_score": layer_payload.get("total_score") if layer_payload else None,
+        "rule_decision": rule_decision,
     }
 
 

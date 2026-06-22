@@ -75,6 +75,7 @@ class MarketSnapshot:
     ma10: float | None = None
     ma20: float | None = None
     ma60: float | None = None
+    ma120: float | None = None
     ma200: float | None = None
     boll_upper: float | None = None
     boll_mid: float | None = None
@@ -92,6 +93,16 @@ class MarketSnapshot:
     bias24: float | None = None
     vol_ma5: float | None = None
     vol_ma20: float | None = None
+    amount_avg20: float | None = None
+    amount_ratio20: float | None = None
+    rsi14: float | None = None
+    ret3: float | None = None
+    ret5: float | None = None
+    ret20: float | None = None
+    ret60: float | None = None
+    max_drawdown_60: float | None = None
+    ma20_slope_pct: float | None = None
+    kline_days: int | None = None
     data_quality: str = "ok"
 
 

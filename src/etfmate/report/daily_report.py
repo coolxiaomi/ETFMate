@@ -110,7 +110,9 @@ def _holding_view(item: dict | None, grid: dict | None = None) -> dict[str, Any]
         _row("量能(VOL)", _volume_summary(item), _volume_compare(item), _volume_alert(item)),
         _row("真实波幅(ATR)", _atr_summary(item), _atr_compare(item), _atr_alert(item)),
         _row("乖离率(BIAS)", _bias_summary(item), _bias_compare(item), _bias_alert(item)),
+        _row("规则评分", _rule_score_summary(item), _rule_score_detail(item), _rule_score_alert(item)),
         _merged_row("动作", _action_merged_html(item)),
+        _merged_row("AI综合研判", _ai_judgement_html(item)),
         _merged_row("网格建议", _grid_table_html(grid)),
         _merged_row("七层证据", _layered_evidence_html(item)),
         _merged_row("总述", _overview_html(item)),
@@ -387,6 +389,7 @@ def _bias_alert(item: dict) -> str:
 def _action_merged_html(item: dict) -> str:
     parts = [
         _action_text(item),
+        _inline_label("过滤", item.get("rule_filter_status")),
         _inline_label("备注", item.get("investor_note")),
         _inline_label("仓位占比", _position_text(item)),
         _inline_label("执行", item.get("position_plan")),
@@ -400,6 +403,25 @@ def _action_text(item: dict) -> str:
     qty = item.get("action_quantity")
     qty_text = "" if qty in (None, "") else f"；参考 {_num(qty, 0)} 份"
     return _span(_display_action(action) + qty_text, _action_class(action))
+
+
+def _ai_judgement_html(item: dict) -> str:
+    judgement = item.get("ai_judgement") or {}
+    if not isinstance(judgement, dict):
+        return _cell_html("AI 综合研判未生成")
+    enabled = bool(judgement.get("enabled"))
+    cls = "attention" if enabled else "neutral"
+    conflicts = "；".join(judgement.get("conflicts") or [])
+    guardrails = "；".join(judgement.get("guardrails") or [])
+    parts = [
+        _span(str(judgement.get("ai_action") or "未启用"), cls),
+        _inline_label("置信度", f"{_num(judgement.get('confidence'), 0)}%"),
+        _inline_label("倾向", judgement.get("final_bias")),
+        _inline_label("判断", judgement.get("judgement")),
+        _inline_label("冲突", conflicts),
+        _inline_label("护栏", guardrails),
+    ]
+    return _join_html(parts)
 
 
 def _overview_html(item: dict) -> str:
@@ -490,12 +512,60 @@ def _grid_row(label: str, current: Any, suggested: Any, suffix: str) -> dict[str
     )
 
 
+def _rule_score_summary(item: dict) -> str:
+    return "；".join(
+        [
+            f"综合 {_num(item.get('rule_total_score'), 1)}",
+            f"趋势 {_num(item.get('rule_trend_score'), 0)}",
+            f"动量 {_num(item.get('rule_momentum_score'), 0)}",
+            f"风险 {_num(item.get('rule_risk_score'), 0)}",
+        ]
+    )
+
+
+def _rule_score_detail(item: dict) -> str:
+    rule = item.get("rule_decision") or {}
+    if not isinstance(rule, dict):
+        return _cell_html("规则评分未生成")
+    return _cell_html(
+        "；".join(
+            part
+            for part in [
+                f"类型 {rule.get('category') or '-'}",
+                f"趋势 {rule.get('trend_level') or '-'}",
+                f"风险 {rule.get('risk_level') or '-'}",
+                f"目标仓位 {_pct(rule.get('target_position_pct'))}",
+            ]
+            if part
+        )
+    )
+
+
+def _rule_score_alert(item: dict) -> str:
+    rule = item.get("rule_decision") or {}
+    if not isinstance(rule, dict):
+        return _cell_html("-")
+    status = str(rule.get("filter_status") or "")
+    risk = _float_or_none(rule.get("risk_score"))
+    blocked = rule.get("blocked_actions") or []
+    if status == "禁止交易" or "全部" in blocked:
+        return _span("触发硬过滤", "danger")
+    if {"买入", "加仓", "提高网格买入侧"} & set(blocked):
+        return _span("限制新增买入", "warn")
+    if {"卖出", "减仓"} & set(blocked):
+        return _span("可卖数量受限", "attention")
+    if risk is not None and risk >= 70:
+        return _span("风险评分偏高", "danger")
+    return _span("规则允许正常复核", "neutral")
+
+
 def _volume_summary(item: dict) -> str:
     return "；".join(
         [
             f"成交量 {_num(item.get('volume'), 0)}",
             f"量比 {_num(item.get('vol_ratio'), 2)}",
             f"换手 {_pct(item.get('turnover_pct'))}",
+            f"成交额/20日 {_num(item.get('amount_ratio20'), 2)}",
         ]
     )
 

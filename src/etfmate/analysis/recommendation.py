@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from etfmate.analysis.layered_context import LayeredContext, normalize_context
+from etfmate.analysis.rule_engine import decide_position
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position
 
 
@@ -11,6 +12,7 @@ def recommend(
     grid: GridConfig | None,
     market: MarketSnapshot,
     all_positions: list[Position] | None = None,
+    all_markets: list[MarketSnapshot] | None = None,
     layered_context: LayeredContext | dict[str, Any] | None = None,
 ) -> dict:
     action = "持有"
@@ -37,6 +39,7 @@ def recommend(
     overheat = bool(boll_pos is not None and boll_pos >= 0.98) or bias6 >= 6
     hard_weak = bool(market.ma20 and market.ma60 and market.last_price < market.ma20 and market.last_price < market.ma60)
     soft_weak = bool(market.ma60 and market.last_price < market.ma60)
+    rule_decision = decide_position(position, grid, market, all_positions or [], all_markets or [])
 
     if boll_pos is not None:
         scores.append(f"BOLL分位 {boll_pos:.0%}")
@@ -143,6 +146,9 @@ def recommend(
         elif total_score >= 2 and action == "减仓" and position and position.pnl_pct < 0:
             risks.append("多层证据未明显转弱，亏损仓位不宜一次性大幅减仓")
 
+    action = _merge_rule_action(action, rule_decision)
+    reasons = list(dict.fromkeys(rule_decision.get("reasons", []) + reasons))
+    risks = list(dict.fromkeys((rule_decision.get("risks") or []) + risks))
     action_quantity, position_plan = _action_plan(action, position, grid)
     reasons = _clean_reasons_for_action(action, reasons)
     return {
@@ -166,6 +172,7 @@ def recommend(
         "ma10": market.ma10,
         "ma20": market.ma20,
         "ma60": market.ma60,
+        "ma120": market.ma120,
         "ma200": market.ma200,
         "atr7_pct": market.atr7_pct,
         "atr14_pct": market.atr14_pct,
@@ -177,6 +184,16 @@ def recommend(
         "volume": market.volume,
         "vol_ma5": market.vol_ma5,
         "vol_ma20": market.vol_ma20,
+        "amount_avg20": market.amount_avg20,
+        "amount_ratio20": market.amount_ratio20,
+        "rsi14": market.rsi14,
+        "ret3": market.ret3,
+        "ret5": market.ret5,
+        "ret20": market.ret20,
+        "ret60": market.ret60,
+        "max_drawdown_60": market.max_drawdown_60,
+        "ma20_slope_pct": market.ma20_slope_pct,
+        "kline_days": market.kline_days,
         "vol_ratio": market.vol_ratio,
         "turnover_pct": market.turnover_pct,
         "amplitude_pct": market.amplitude_pct,
@@ -191,6 +208,12 @@ def recommend(
         "layered_context": layer_payload,
         "layered_confidence": layer_payload.get("confidence") if layer_payload else None,
         "layered_score": layer_payload.get("total_score") if layer_payload else None,
+        "rule_decision": rule_decision,
+        "rule_total_score": rule_decision.get("total_score"),
+        "rule_trend_score": rule_decision.get("trend_score"),
+        "rule_momentum_score": rule_decision.get("momentum_score"),
+        "rule_risk_score": rule_decision.get("risk_score"),
+        "rule_filter_status": rule_decision.get("filter_status"),
     }
 
 
@@ -220,6 +243,20 @@ def _clean_reasons_for_action(action: str, reasons: list[str]) -> list[str]:
     if action == "持有":
         return reasons
     return [reason for reason in reasons if "暂未触发强动作信号" not in reason]
+
+
+def _merge_rule_action(current_action: str, rule_decision: dict[str, Any]) -> str:
+    rule_action = str(rule_decision.get("action") or "")
+    blocked = set(rule_decision.get("blocked_actions") or [])
+    if current_action in {"减仓", "卖出"} and {"减仓", "卖出"} & blocked:
+        return "持有"
+    if rule_action in {"禁止交易", "卖出", "减仓"}:
+        return rule_action
+    if current_action in {"暂停网格", "暂停买入侧"} and rule_action in {"观察", "持有", "减仓"}:
+        return current_action
+    if rule_action in {"分批买入", "分批加仓", "观察"}:
+        return rule_action
+    return current_action
 
 
 def _watch_price(market: MarketSnapshot) -> str:
@@ -261,7 +298,13 @@ def _action_plan(action: str, position: Position | None, grid: GridConfig | None
     if not position:
         if action in {"买入", "分批买入"}:
             return grid_qty or 100, "无当前持仓，只适合按单格小仓位试探"
+        if action in {"观察", "禁止交易"}:
+            return None, "无当前持仓，暂不新开仓"
         return None, "无当前持仓"
+    if action == "禁止交易":
+        return None, "触发硬过滤条件，本次不新增交易动作"
+    if action == "观察":
+        return None, "保留观察，不新增买入或卖出动作"
     if action in {"减仓", "卖出"}:
         if action == "减仓":
             target = min(grid_qty or quantity * 0.2, quantity * 0.5)

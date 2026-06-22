@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from etfmate.analysis.ai_advisor import attach_ai_judgements, build_ai_judgements
 from etfmate.analysis.grid_advisor import advise_grid
 from etfmate.analysis.layered_context import build_layered_context, context_to_dict
 from etfmate.analysis.recommendation import recommend
@@ -100,20 +101,25 @@ def run_analyze(root: Path, run_id: str) -> None:
             grids_by_code.get(item.code),
             item,
             all_positions=positions,
+            all_markets=snapshots,
             layered_context=layered_contexts.get(item.code),
         )
         for item in snapshots
     ]
+    rule_decisions = {str(item.get("code")): item.get("rule_decision") for item in recommendations}
     grid_advices = [
         advise_grid(
             item,
             snapshots_by_code[item.code],
             positions_by_code.get(item.code),
             layered_context=layered_contexts.get(item.code),
+            rule_decision=rule_decisions.get(item.code),
         )
         for item in grids
         if item.code in snapshots_by_code
     ]
+    ai_judgements = build_ai_judgements(recommendations, grid_advices)
+    recommendations = attach_ai_judgements(recommendations, ai_judgements)
     run_date = _run_date(run_id)
     payload = {
         "run_id": run_id,
@@ -124,6 +130,7 @@ def run_analyze(root: Path, run_id: str) -> None:
         "layered_contexts": {code: context_to_dict(context) for code, context in layered_contexts.items()},
         "recommendations": recommendations,
         "grid_advices": grid_advices,
+        "ai_judgements": ai_judgements,
         "trade_review": review_trades(trades),
         "trade_reviews": review_trade_periods(trades, run_date),
     }
@@ -152,6 +159,8 @@ def run_report(root: Path, run_id: str) -> None:
     snapshots = analysis.get("market_snapshots", [])
     sources = {s.get("data_quality", "") for s in snapshots if isinstance(s, dict) and s.get("data_quality")}
     layered_contexts = analysis.get("layered_contexts") or {}
+    ai_judgements = analysis.get("ai_judgements") or {}
+    ai_enabled_count = sum(1 for item in ai_judgements.values() if isinstance(item, dict) and item.get("enabled"))
     layer_count = len(layered_contexts)
     avg_layer_confidence = _avg_number(item.get("confidence") for item in layered_contexts.values() if isinstance(item, dict))
     layer_sources = _layer_source_summary(layered_contexts)
@@ -166,6 +175,12 @@ def run_report(root: Path, run_id: str) -> None:
                 "count": f"{layer_count} 只，平均置信度 {_fmt_pct(avg_layer_confidence)}",
                 "source": layer_sources,
                 "note": "缺失层不生成假结论，只降低建议强度",
+            },
+            {
+                "label": "AI 综合研判",
+                "count": f"{len(ai_judgements)} 只，已启用 {ai_enabled_count} 只",
+                "source": "OpenAI Responses API（配置 API Key 后启用）",
+                "note": "AI 只做证据复核，不绕过规则硬过滤",
             },
         ]
     }

@@ -14,10 +14,17 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     low = out["low"].astype(float)
     volume = out["volume"].astype(float)
 
-    for window in (5, 10, 20, 60, 200):
+    for window in (5, 10, 20, 60, 120, 200):
         out[f"ma{window}"] = close.rolling(window).mean()
     out["vol_ma5"] = volume.rolling(5).mean()
     out["vol_ma20"] = volume.rolling(20).mean()
+    if "amount" in out.columns:
+        amount = out["amount"].astype(float)
+        out["amount_avg20"] = amount.rolling(20).mean()
+        out["amount_ratio20"] = amount / out["amount_avg20"]
+    else:
+        out["amount_avg20"] = None
+        out["amount_ratio20"] = None
 
     mid = close.rolling(20).mean()
     std = close.rolling(20).std()
@@ -34,4 +41,15 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     for window in (6, 12, 24):
         ma = close.rolling(window).mean()
         out[f"bias{window}"] = (close - ma) / ma * 100
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, pd.NA)
+    out["rsi14"] = 100 - (100 / (1 + rs))
+    for window in (3, 5, 20, 60):
+        out[f"ret{window}"] = (close / close.shift(window) - 1) * 100
+    rolling_peak = close.rolling(60).max()
+    out["max_drawdown_60"] = (close / rolling_peak - 1) * 100
+    out["ma20_slope_pct"] = (out["ma20"] / out["ma20"].shift(5) - 1) * 100
+    out["kline_days"] = range(1, len(out) + 1)
     return out
