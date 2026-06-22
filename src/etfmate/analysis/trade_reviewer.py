@@ -71,14 +71,22 @@ def _review_period(label: str, trades: list[Trade], run_date: str, days: int) ->
 
 def _filter_trades(trades: list[Trade], run_date: str, days: int) -> list[Trade]:
     end = _parse_date(run_date)
+    if end is None:
+        return []
     start = end if days == 0 else end - timedelta(days=days - 1)
     selected: list[Trade] = []
     for trade in trades:
         trade_date = _parse_date(trade.trade_date)
-        if start <= trade_date <= end:
+        if trade_date is not None and start <= trade_date <= end:
             selected.append(trade)
     return selected
 
 
-def _parse_date(value: str) -> date:
-    return datetime.strptime(value[:10], "%Y-%m-%d").date()
+def _parse_date(value: str) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None

@@ -302,6 +302,8 @@ def _watch_item_filter(item: dict) -> tuple[bool, str]:
         return False, "过滤可转债"
     if _looks_like_hk_stock(code, text):
         return False, "过滤港股股票；跨境 ETF 需使用 A 股场内基金代码"
+    if _looks_like_otc_fund(code):
+        return False, "过滤场外基金/ETF-FOF；仅保留交易所场内基金代码段"
     if _is_fund_code(code):
         return True, "场内基金代码段，保留 ETF/LOF/场内基金"
     if any(word in text.upper() for word in ("ETF", "LOF", "REIT")) or any(word in text for word in ("基金", "场内基金")):
@@ -325,6 +327,10 @@ def _is_fund_code(code: str) -> bool:
 
 def _is_a_share_stock_code(code: str) -> bool:
     return bool(re.fullmatch(r"\d{6}", code)) and code[:3] in {"000", "001", "002", "003", "300", "301", "600", "601", "603", "605", "688", "689"}
+
+
+def _looks_like_otc_fund(code: str) -> bool:
+    return bool(re.fullmatch(r"\d{6}", code)) and code[:2] in {"00", "01", "02"}
 
 
 def _is_convertible_bond(code: str, text: str) -> bool:
@@ -489,18 +495,20 @@ def _trade_records_from_text(text: str) -> list[dict]:
         next_idx = next((pos for pos in range(idx + 1, len(lines)) if _is_code(lines[pos])), min(len(lines), idx + 16))
         window = lines[idx:next_idx]
         block = "\n".join(window)
-        if not any(word in block for word in ("买入", "卖出", "申购", "赎回", "成交")):
+        side_idx = next((pos for pos, item in enumerate(window) if item in {"买入", "卖出", "申购", "赎回"}), -1)
+        if side_idx < 0:
             continue
-        numeric_text = "\n".join(
-            item
-            for item in window
-            if not _is_code(item)
-            and not re.fullmatch(r"20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}", item)
-            and not re.fullmatch(r"\d{1,2}:\d{2}(?::\d{2})?", item)
-        )
-        nums = [item.replace(",", "") for item in re.findall(r"(?<!\d)[+-]?\d+(?:\.\d+)?(?!\d)", numeric_text)]
-        side = next((word for word in ("买入", "卖出", "申购", "赎回") if word in block), "")
+        numeric_fields = [
+            item.replace(",", "").replace("%", "")
+            for item in window[side_idx + 1 :]
+            if _looks_like_number(item)
+        ]
+        if len(numeric_fields) < 3:
+            continue
+        side = window[side_idx]
         date_match = re.search(r"20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}", block)
+        if not date_match:
+            continue
         time_match = re.search(r"\d{1,2}:\d{2}(?::\d{2})?", block)
         records.append(
             {
@@ -509,9 +517,10 @@ def _trade_records_from_text(text: str) -> list[dict]:
                 "side": side,
                 "trade_date": date_match.group(0).replace("/", "-").replace(".", "-") if date_match else "",
                 "trade_time": time_match.group(0) if time_match else "",
-                "price": nums[0] if nums else "",
-                "quantity": nums[1] if len(nums) > 1 else "",
-                "amount": nums[2] if len(nums) > 2 else "",
+                "price": numeric_fields[0],
+                "quantity": numeric_fields[1],
+                "amount": numeric_fields[2],
+                "fee": numeric_fields[3] if len(numeric_fields) > 3 else "",
                 "raw_text": block,
             }
         )

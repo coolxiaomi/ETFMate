@@ -197,6 +197,11 @@ def run_report(root: Path, run_id: str) -> None:
     avg_layer_confidence = _avg_number(item.get("confidence") for item in layered_contexts.values() if isinstance(item, dict))
     layer_sources = _layer_source_summary(layered_contexts)
     data_completeness = {
+        "stats": {
+            "watchlist_count": len(watchlist),
+            "positions_count": positions_count,
+            "grids_count": grids_count,
+        },
         "items": [
             {"label": "同花顺持仓", "count": str(positions_count), "source": "同花顺投资账本", "note": "完整" if positions_count else "无数据"},
             {"label": "同花顺已清仓", "count": f"{closed_count} 条", "source": "同花顺投资账本已清仓 tab", "note": "滚动采集完整" if closed_count else "无数据"},

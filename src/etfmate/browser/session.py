@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 DEFAULT_PROXY_URL = "http://localhost:3456"
 DEFAULT_LOGIN_WAIT_SECONDS = 600
-URL_SAFE_CHARS = ":/?#[]@!$&'()*+,;=%"
+URL_SAFE_CHARS = ":/?[]@!$&'()*+,;=%"
 
 
 class WebAccessNotReadyError(RuntimeError):
