@@ -95,14 +95,25 @@ def _etf_view(item: dict) -> dict[str, Any]:
     nav = _nav_signal(action, grid_action, rec)
     pnl_class = _pnl_class(rec)
     grid_short = _compact_grid_action(grid_action)
+    is_held = bool(rec and (_float_or_none(rec.get("quantity")) or 0) > 0)
+    is_grid = bool(grid)
+    is_pool = bool(rec and (rec.get("is_watchlist_candidate") or "自选ETF池" in str(rec.get("candidate_source") or "")))
+    trend_score = _float_or_none(rec.get("rule_trend_score")) if rec else None
     return {
         "id": f"etf-{_anchor(code)}",
         "code": code,
         "name": str(name),
+        "is_held": is_held,
+        "is_grid": is_grid,
+        "is_pool": is_pool,
+        "filter_tags": _filter_tags(is_held, is_grid, is_pool),
         "pnl_class": pnl_class,
         "pnl_text": _pnl_text(rec),
         "holding_pct_value": _float_or_none(rec.get("position_pct")) if rec else None,
         "holding_pct_text": _pct(rec.get("position_pct")) if rec and rec.get("position_pct") is not None else "-",
+        "trend_score": trend_score,
+        "trend_score_text": "-" if trend_score is None else f"{trend_score:.0f}",
+        "trend_width": f"{max(4, min(100, trend_score or 0)):.1f}",
         "nav_action": nav["action"],
         "nav_action_class": nav["action_class"],
         "nav_heat": nav["heat"],
@@ -131,11 +142,9 @@ def _holding_view(item: dict | None, grid: dict | None = None) -> dict[str, Any]
         _row("RSI(相对强弱)", _rsi_summary(item), _rsi_compare(item), _rsi_alert(item)),
         _row("MACD(指数平滑异同)", _macd_summary(item), _macd_compare(item), _macd_alert(item)),
         _row("规则", _rule_score_summary(item), _rule_score_detail(item), _rule_score_alert(item)),
-        _merged_row("动作", _action_merged_html(item)),
-        _merged_row("AI", _ai_judgement_html(item)),
         _merged_row("网格", _grid_table_html(grid)),
-        _merged_row("证据", _layered_evidence_html(item)),
-        _merged_row("摘要", _overview_html(item)),
+        _merged_row("综合结论", _combined_conclusion_html(item)),
+        _merged_row("明细", _detail_drawer_html(item)),
     ]
     return {"empty": False, "message": "", "rows": rows}
 
@@ -242,11 +251,24 @@ def _portfolio_stats(recommendations: list[dict], grid_advices: list[dict], data
         held_count = sum(1 for item in recommendations if (_float_or_none(item.get("quantity")) or 0) > 0)
     if grid_count is None:
         grid_count = len(grid_advices)
+    all_count = len({str(item.get("code") or "") for item in recommendations + grid_advices if item.get("code")})
     return {
-        "pool_count": pool_count,
         "held_count": held_count,
         "grid_count": grid_count,
+        "pool_count": pool_count,
+        "all_count": all_count,
     }
+
+
+def _filter_tags(is_held: bool, is_grid: bool, is_pool: bool) -> str:
+    tags = ["all"]
+    if is_held:
+        tags.append("held")
+    if is_grid:
+        tags.append("grid")
+    if is_pool:
+        tags.append("pool")
+    return " ".join(tags)
 
 
 def _data_count(data_completeness: dict | None, label: str) -> int | None:
@@ -276,11 +298,11 @@ def _int_or_none(value: Any) -> int | None:
 def _nav_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     order = ["热", "温", "平", "凉", "寒"]
     meanings = {
-        "热": "短趋≥85",
-        "温": "短趋75-84",
-        "平": "短趋60-74",
-        "凉": "短趋45-59",
-        "寒": "短趋<45",
+        "热": "趋势评分≥85",
+        "温": "趋势评分75-84",
+        "平": "趋势评分60-74",
+        "凉": "趋势评分45-59",
+        "寒": "趋势评分<45",
     }
     grouped = {key: [] for key in order}
     for etf in etfs:
@@ -303,6 +325,7 @@ def _nav_dashboard(etfs: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "decision_groups": _nav_groups(etfs),
         "action_groups": _action_groups(etfs),
+        "trend_items": _trend_items(etfs),
         "holding": _holding_pie(etfs),
         "pnl": _pnl_dashboard(etfs),
         "grid_groups": _grid_groups(etfs),
@@ -385,6 +408,12 @@ def _risk_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def _trend_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    items = [item for item in etfs if item.get("trend_score") is not None]
+    items.sort(key=lambda item: (-(item.get("trend_score") or 0), item.get("code")))
+    return items
+
+
 def _title_meta(item: dict | None, grid: dict | None) -> str:
     if not item:
         return " · 未出现在当前持仓分析中"
@@ -406,7 +435,7 @@ def _title_meta(item: dict | None, grid: dict | None) -> str:
     else:
         parts.extend(["未持仓", f"目标仓位 {_pct(item.get('target_position_pct'))}"])
     parts.append("网格开" if grid else "无网格")
-    return " · " + "；".join(part for part in parts if part)
+    return " · " + "；".join(_simplify_direction_text(part) for part in parts if part)
 
 
 def _holding_summary(item: dict) -> str:
@@ -697,9 +726,39 @@ def _overview_html(item: dict) -> str:
         [
             _inline_label("观察价位", item.get("watch_price")),
             _inline_label("入场计划", item.get("entry_plan")),
-            f'<span class="{cls}">{escape(risk_text)}</span>',
+            f'<span class="{cls}">{escape(_simplify_direction_text(risk_text))}</span>',
         ]
     )
+
+
+def _combined_conclusion_html(item: dict) -> str:
+    judgement = item.get("ai_judgement") or {}
+    ai_text = ""
+    if isinstance(judgement, dict):
+        ai_action = judgement.get("ai_action")
+        final_bias = judgement.get("final_bias")
+        ai_text = "；".join(str(part) for part in (ai_action, final_bias) if part)
+    parts = [
+        _action_text(item),
+        _inline_label("仓位", _position_text(item)),
+        _inline_label("计划", item.get("position_plan")),
+        _inline_label("依据", "；".join(_filtered_action_reasons(item)[:2])),
+        _inline_label("AI", ai_text),
+        _inline_label("风险", "；".join(_filtered_risks(item)[:2])),
+    ]
+    return _join_html(parts)
+
+
+def _detail_drawer_html(item: dict) -> str:
+    content = _join_html(
+        [
+            f"<strong>动作</strong>{_action_merged_html(item)}",
+            f"<strong>AI</strong>{_ai_judgement_html(item)}",
+            f"<strong>证据</strong>{_layered_evidence_html(item)}",
+            f"<strong>摘要</strong>{_overview_html(item)}",
+        ]
+    )
+    return f'<details class="detail-drawer"><summary>展开动作 / AI / 证据 / 摘要</summary><div class="detail-body">{content}</div></details>'
 
 
 def _layered_evidence_html(item: dict) -> str:
@@ -713,19 +772,40 @@ def _layered_evidence_html(item: dict) -> str:
     for layer in layers:
         name = _cell(layer.get("name"))
         status = _cell(layer.get("status"))
+        if status == "待接入":
+            continue
         score = _float_or_none(layer.get("score"))
         score_text = "" if score is None or score == 0 else f" {score:+.0f}"
         cls = _layer_status_class(status, score)
-        chips.append(_span(f"{name}:{status}{score_text}", cls))
-    summary = _cell(context.get("summary"))
+        chips.append(_span(f"{_short_layer_name(name)}:{score_text.strip() or '0'}", cls))
+    summary = _clean_layer_summary(_cell(context.get("summary")))
     return _join_html(
         [
-            _inline_label("证据置信度", f"{_num(context.get('confidence'), 0)}%"),
-            _inline_label("证据总分", _num(context.get("total_score"), 0)),
+            _inline_label("置信度", f"{_num(context.get('confidence'), 0)}%"),
+            _inline_label("总分", _num(context.get("total_score"), 0)),
             " ".join(chips),
             escape(summary),
         ]
     )
+
+
+def _short_layer_name(name: str) -> str:
+    mapping = {
+        "行情技术层": "行情",
+        "研报预期层": "研报",
+        "热点信号层": "热点",
+        "资金筹码层": "资金",
+        "新闻舆情层": "新闻",
+        "基础数据层": "基本面",
+        "公告事件层": "公告",
+    }
+    return mapping.get(name, name.replace("层", ""))
+
+
+def _clean_layer_summary(text: str) -> str:
+    text = re.sub(r"七层证据当前置信度\s*\d+(?:\.\d+)?%[；,，。]?", "", text)
+    text = re.sub(r"证据置信度[:：]\s*\d+(?:\.\d+)?%[；,，。]?", "", text)
+    return _simplify_direction_text(text.strip("；,，。 ")) or "-"
 
 
 def _layer_status_class(status: str, score: float | None) -> str:
@@ -794,7 +874,7 @@ def _rule_score_summary(item: dict) -> str:
     return "；".join(
         [
             f"综合 {_num(item.get('rule_total_score'), 1)}",
-            f"短趋 {_num(item.get('rule_trend_score'), 0)}",
+            f"趋势评分 {_num(item.get('rule_trend_score'), 0)}",
             f"中期动量 {_num(item.get('rule_momentum_score'), 0)}",
             f"风险 {_num(item.get('rule_risk_score'), 0)}",
         ]
@@ -809,7 +889,7 @@ def _rule_score_detail(item: dict) -> str:
     tags = "、".join(rule.get("trend_tags") or [])
     trend_parts = ""
     if isinstance(scores, dict) and scores:
-        trend_parts = "短趋分项 " + "/".join(
+        trend_parts = "趋势评分分项 " + "/".join(
             [
                 f"MA{_num(scores.get('ma_score'), 0)}",
                 f"VOL{_num(scores.get('vol_score'), 0)}",
@@ -911,7 +991,13 @@ def _format_with_suffix(value: Any, suffix: str) -> str:
 
 
 def _row(label: str, current: str, reference: str, alert: str) -> dict[str, Any]:
-    return {"label": label, "current": current, "reference": reference, "alert": alert, "merged": False}
+    return {
+        "label": label,
+        "current": _metric_value_html(current),
+        "reference": _metric_value_html(reference),
+        "alert": alert,
+        "merged": False,
+    }
 
 
 def _merged_row(label: str, content: str) -> dict[str, Any]:
@@ -923,7 +1009,8 @@ def _pill(text: str, cls: str) -> str:
 
 
 def _display_action(action: str) -> str:
-    return "暂停买入侧" if action == "暂停网格" else action
+    text = "停买" if action == "暂停网格" else action
+    return _simplify_direction_text(text)
 
 
 def _preferred_name(current: Any, candidate: Any, code: str) -> str:
@@ -946,14 +1033,14 @@ def _is_human_etf_name(value: str, code: str) -> bool:
 
 
 def _span(value: Any, cls: str) -> str:
-    return f'<span class="{escape(cls)}">{escape(_cell(value))}</span>'
+    return f'<span class="{escape(cls)}">{escape(_simplify_direction_text(_cell(value)))}</span>'
 
 
 def _inline_label(label: str, value: Any) -> str:
-    text = _cell(value)
+    text = _simplify_direction_text(_cell(value))
     if text == "-":
         return ""
-    return f'<span class="inline-label">{escape(label)}：</span>{escape(text)}'
+    return f'<span class="inline-label">{escape(label)}：</span>{_highlight_keywords(text)}'
 
 
 def _join_html(parts: list[str]) -> str:
@@ -961,7 +1048,58 @@ def _join_html(parts: list[str]) -> str:
 
 
 def _cell_html(value: Any) -> str:
-    return escape(_cell(value))
+    return escape(_simplify_direction_text(_cell(value)))
+
+
+def _metric_value_html(value: Any) -> str:
+    text = _simplify_direction_text(_cell(value))
+    if "<" in text and ">" in text:
+        return text
+    if "&lt;" in text or "&gt;" in text:
+        return text
+    escaped = escape(text)
+    return re.sub(r"([+-]\d+(?:\.\d+)?%?)", _signed_number_span, escaped)
+
+
+def _signed_number_span(match: re.Match[str]) -> str:
+    value = match.group(1)
+    cls = "profit" if value.startswith("+") else "loss"
+    return f'<span class="{cls}">{value}</span>'
+
+
+def _highlight_keywords(text: str) -> str:
+    escaped = escape(_simplify_direction_text(text))
+    rules = [
+        (r"(停买|暂停|风控|禁止|高风险|跌破|过热)", "danger"),
+        (r"(降低买|降买|调宽|调窄|需调整|谨慎)", "warn"),
+        (r"(买入|加仓|建仓|偏强|盈利|修复)", "profit"),
+        (r"(卖出|减仓|退出|亏损|偏弱)", "loss"),
+        (r"(持有|观察|等待|维持)", "attention"),
+    ]
+    for pattern, cls in rules:
+        escaped = re.sub(pattern, rf'<strong class="{cls}">\1</strong>', escaped)
+    return escaped
+
+
+def _simplify_direction_text(value: Any) -> str:
+    text = str(value)
+    replacements = {
+        "ShortTrendScore": "趋势评分",
+        "暂停买入侧": "停买",
+        "暂停买入": "停买",
+        "降低买入侧": "降低买",
+        "提高买入侧": "提高买",
+        "网格买入侧": "网格买",
+        "买入侧": "买",
+        "卖出侧": "卖",
+        "买入触发": "买触发",
+        "卖出触发": "卖触发",
+        "买入数量": "买数量",
+        "卖出数量": "卖数量",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
 
 
 def _color_number(value: Any, suffix: str = "") -> str:
@@ -1109,8 +1247,10 @@ def _compact_action(action: str) -> str:
 def _compact_grid_action(action: str) -> str:
     display = _display_action(action)
     if "暂停" in display:
-        return "暂停买"
-    if "降低买入" in display:
+        return "停买"
+    if "停买" in display:
+        return "停买"
+    if "降低买" in display:
         return "降买"
     if "调宽" in display:
         return "调宽"
@@ -1203,4 +1343,5 @@ def _float_or_none_from_text(value: Any) -> float | None:
 def _cell(value: Any) -> str:
     text = "-" if value is None or value == "" else str(value)
     text = text.replace("\n", " ").strip()
+    text = _simplify_direction_text(text)
     return text if text else "-"

@@ -47,10 +47,20 @@ h1 { font-size: 26px; line-height: 1.2; }
 h2 { font-size: 18px; margin-bottom: 10px; }
 h3 { font-size: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .title-meta { font-size: 11px; font-weight: 500; }
-.summary { display: grid; grid-template-columns: repeat(3, 94px); gap: 8px; }
-.summary div { background: var(--panel); border: 1px solid var(--line); padding: 8px 10px; }
-.summary span { display: block; font-size: 22px; font-weight: 800; }
-.summary label { color: var(--muted); font-size: 12px; }
+.summary { display: grid; grid-template-columns: repeat(4, 86px); gap: 8px; }
+.summary-card {
+  appearance: none;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+}
+.summary-card:hover, .summary-card.is-active { border-color: var(--blue); box-shadow: inset 0 -2px 0 var(--blue); }
+.summary-card span { display: block; font-size: 22px; font-weight: 800; }
+.summary-card label { color: var(--muted); font-size: 12px; cursor: pointer; }
 .section { margin-top: 18px; }
 .etf-heading-name { font-weight: 900; display: inline-flex; align-items: center; gap: 5px; }
 .nav-dashboard {
@@ -107,8 +117,29 @@ h3 { font-size: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: w
 .mini-code { white-space: nowrap; }
 .mini-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-pnl { font-size: 11px; white-space: nowrap; }
+.decision-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: stretch;
+}
+.decision-panel .cluster {
+  flex: 1 1 calc(185px + var(--group-count, 1) * 34px);
+  min-width: min(100%, 230px);
+  margin-bottom: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--cluster-bg, #fbfdfd);
+}
+.decision-panel .cluster:nth-child(5n+1) { --cluster-bg: #fff7ed; }
+.decision-panel .cluster:nth-child(5n+2) { --cluster-bg: #f0fdf4; }
+.decision-panel .cluster:nth-child(5n+3) { --cluster-bg: #eff6ff; }
+.decision-panel .cluster:nth-child(5n+4) { --cluster-bg: #f8fafc; }
+.decision-panel .cluster:nth-child(5n+5) { --cluster-bg: #fef2f2; }
 .cluster { margin-bottom: 9px; }
 .cluster-title { margin: 0 0 5px; font-size: 13px; font-weight: 900; }
+.cluster-count { color: var(--muted); }
 .pie-wrap { display: grid; grid-template-columns: 170px 1fr; gap: 14px; align-items: center; }
 .pie {
   width: 160px;
@@ -168,6 +199,17 @@ h3 { font-size: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: w
 .risk-track { height: 9px; background: var(--soft); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
 .risk-fill { display: block; height: 100%; border-radius: inherit; background: var(--warn); }
 .risk-empty { color: var(--muted); font-weight: 800; }
+.trend-bars { display: grid; gap: 7px; }
+.trend-bar {
+  display: grid;
+  grid-template-columns: 42px 180px minmax(130px, 1fr) 48px;
+  gap: 8px;
+  align-items: center;
+  color: var(--text);
+  text-decoration: none;
+}
+.trend-track { height: 10px; background: var(--soft); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.trend-fill { display: block; height: 100%; border-radius: inherit; background: var(--blue); }
 .nav-groups { display: grid; gap: 10px; margin-bottom: 12px; }
 .nav-group {
   background: var(--panel);
@@ -365,9 +407,9 @@ table {
   background: #fbfdfd;
 }
 .embedded-grid thead th { background: #e8eef0; }
-.embedded-grid .grid-item-col { width: 64px; }
+.embedded-grid .grid-item-col { width: 46px; }
 .embedded-grid .grid-num-col { width: 108px; }
-.embedded-grid tbody th { width: 64px; background: #f2f6f7; white-space: nowrap; }
+.embedded-grid tbody th { width: 46px; background: #f2f6f7; white-space: nowrap; }
 .inline-label { color: var(--muted); font-weight: 800; }
 .profit, .action-buy { color: var(--profit); font-weight: 800; }
 .loss, .action-sell { color: var(--loss); font-weight: 800; }
@@ -376,6 +418,17 @@ table {
 .attention { color: var(--blue); font-weight: 800; }
 .neutral { color: var(--muted); font-weight: 700; }
 .strong { text-decoration: underline; text-underline-offset: 2px; }
+.detail-drawer summary {
+  cursor: pointer;
+  font-weight: 900;
+  color: var(--blue);
+}
+.detail-body {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--line);
+}
+.is-filtered-out { display: none !important; }
 @media (max-width: 980px) {
   .page { width: min(100% - 18px, 1500px); padding-top: 10px; }
   .hero, .etf-title { display: block; }
@@ -386,6 +439,7 @@ table {
   .legend-row { grid-template-columns: 10px 72px minmax(0, 1fr) 44px; }
   .pnl-bar { grid-template-columns: 1fr; gap: 3px; }
   .risk-bar { grid-template-columns: 1fr; gap: 3px; }
+  .trend-bar { grid-template-columns: 1fr; gap: 3px; }
   .holding-bar { grid-template-columns: 1fr; gap: 3px; }
   .holding-map-head, .nav-group-head { display: block; }
   .nav-group-summary { text-align: left; margin-top: 4px; }
@@ -405,9 +459,10 @@ table {
         <p class="date">{{ date }}</p>
       </div>
       <div class="summary">
-        <div><span>{{ portfolio_stats.pool_count }}</span><label>ETF池</label></div>
-        <div><span>{{ portfolio_stats.held_count }}</span><label>持仓</label></div>
-        <div><span>{{ portfolio_stats.grid_count }}</span><label>网格</label></div>
+        <button class="summary-card" type="button" data-filter="held"><span>{{ portfolio_stats.held_count }}</span><label>持仓</label></button>
+        <button class="summary-card" type="button" data-filter="grid"><span>{{ portfolio_stats.grid_count }}</span><label>网格</label></button>
+        <button class="summary-card" type="button" data-filter="pool"><span>{{ portfolio_stats.pool_count }}</span><label>ETF池</label></button>
+        <button class="summary-card is-active" type="button" data-filter="all"><span>{{ portfolio_stats.all_count }}</span><label>全部</label></button>
       </div>
     </header>
 
@@ -417,22 +472,36 @@ table {
       <section class="nav-dashboard" aria-label="数据速览">
         <div class="tabbar" role="tablist">
           <button class="tab-button is-active" type="button" data-tab="decision">决策</button>
+          <button class="tab-button" type="button" data-tab="trend">趋势评分</button>
           <button class="tab-button" type="button" data-tab="holding">持仓</button>
           <button class="tab-button" type="button" data-tab="pnl">盈亏</button>
           <button class="tab-button" type="button" data-tab="grid">网格</button>
           <button class="tab-button" type="button" data-tab="risk">风险</button>
         </div>
         <div class="tab-panel is-active" data-panel="decision">
+          <div class="decision-panel">
           {% for group in nav_dashboard.action_groups %}
-          <section class="cluster">
-            <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> {{ group.count }}</h3>
+          <section class="cluster filter-group" style="--group-count: {{ group.count }}">
+            <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> <span class="cluster-count" data-count>{{ group.count }}</span></h3>
             <div class="mini-list">
               {% for etf in group.etfs %}
-              <a class="mini-chip" href="#{{ etf.id }}"><span class="heat heat-mini {{ etf.nav_heat_class }}" title="{{ etf.nav_heat_tip }}" aria-label="{{ etf.nav_heat_tip }}">{{ etf.nav_heat }}</span><span class="mini-code {{ etf.pnl_class }}">{{ etf.code }}</span><span class="mini-name">{{ etf.name }}</span><span class="mini-pnl {{ etf.pnl_class }}">{{ etf.pnl_text }}</span></a>
+              <a class="mini-chip filter-item" data-tags="{{ etf.filter_tags }}" href="#{{ etf.id }}"><span class="heat heat-mini {{ etf.nav_heat_class }}" title="{{ etf.nav_heat_tip }}" aria-label="{{ etf.nav_heat_tip }}">{{ etf.nav_heat }}</span><span class="mini-code {{ etf.pnl_class }}">{{ etf.code }}</span><span class="mini-name">{{ etf.name }}</span><span class="mini-pnl {{ etf.pnl_class }}">{{ etf.pnl_text }}</span></a>
               {% endfor %}
             </div>
           </section>
           {% endfor %}
+          </div>
+        </div>
+        <div class="tab-panel" data-panel="trend">
+          {% if nav_dashboard.trend_items %}
+          <div class="trend-bars">
+            {% for etf in nav_dashboard.trend_items %}
+            <a class="trend-bar filter-item" data-tags="{{ etf.filter_tags }}" href="#{{ etf.id }}"><span class="heat {{ etf.nav_heat_class }}" title="{{ etf.nav_heat_tip }}" aria-label="{{ etf.nav_heat_tip }}">{{ etf.nav_heat }}</span><span class="bar-name {{ etf.pnl_class }}">{{ etf.code }} {{ etf.name }}</span><span class="trend-track"><span class="trend-fill {{ etf.nav_heat_class }}" style="width: {{ etf.trend_width }}%"></span></span><span>{{ etf.trend_score_text }}</span></a>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="risk-empty">无趋势评分数据</div>
+          {% endif %}
         </div>
         <div class="tab-panel" data-panel="holding">
           {% if nav_dashboard.holding.empty %}
@@ -447,7 +516,7 @@ table {
             <div class="pie" style="--pie: {{ nav_dashboard.holding.gradient }}"><div class="pie-center">{{ nav_dashboard.holding.total_pct }}</div></div>
             <div class="legend">
               {% for seg in nav_dashboard.holding.segments %}
-              <a class="legend-row" href="#{{ seg.id }}"><span class="swatch" style="background: {{ seg.color }}"></span><span class="{{ seg.pnl_class }}">{{ seg.code }}</span><span class="mini-name">{{ seg.name }}</span><span>{{ seg.holding_pct_text }}</span></a>
+              <a class="legend-row filter-item" data-tags="{{ seg.filter_tags }}" href="#{{ seg.id }}"><span class="swatch" style="background: {{ seg.color }}"></span><span class="{{ seg.pnl_class }}">{{ seg.code }}</span><span class="mini-name">{{ seg.name }}</span><span>{{ seg.holding_pct_text }}</span></a>
               {% endfor %}
             </div>
           </div>
@@ -460,17 +529,17 @@ table {
           </div>
           <div class="pnl-bars">
             {% for row in nav_dashboard.pnl.rows %}
-            <a class="pnl-bar" href="#{{ row.id }}"><span class="bar-name {{ row.pnl_class }}">{{ row.code }} {{ row.name }}</span><span class="pnl-track"><span class="pnl-fill {{ row.pnl_class }}" style="width: {{ row.width }}%"></span></span><span class="{{ row.pnl_class }}">{{ row.pnl_value }}</span></a>
+            <a class="pnl-bar filter-item" data-tags="{{ row.filter_tags }}" href="#{{ row.id }}"><span class="bar-name {{ row.pnl_class }}">{{ row.code }} {{ row.name }}</span><span class="pnl-track"><span class="pnl-fill {{ row.pnl_class }}" style="width: {{ row.width }}%"></span></span><span class="{{ row.pnl_class }}">{{ row.pnl_value }}</span></a>
             {% endfor %}
           </div>
         </div>
         <div class="tab-panel" data-panel="grid">
           {% for group in nav_dashboard.grid_groups %}
-          <section class="cluster">
-            <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> {{ group.count }}</h3>
+          <section class="cluster filter-group">
+            <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> <span class="cluster-count" data-count>{{ group.count }}</span></h3>
             <div class="mini-list">
               {% for etf in group.etfs %}
-              <a class="mini-chip" href="#{{ etf.id }}"><span class="{{ etf.grid_action_class }}">{{ etf.grid_action_short }}</span><span class="mini-code {{ etf.pnl_class }}">{{ etf.code }}</span><span class="mini-name">{{ etf.name }}</span></a>
+              <a class="mini-chip filter-item" data-tags="{{ etf.filter_tags }}" href="#{{ etf.id }}"><span class="{{ etf.grid_action_class }}">{{ etf.grid_action_short }}</span><span class="mini-code {{ etf.pnl_class }}">{{ etf.code }}</span><span class="mini-name">{{ etf.name }}</span></a>
               {% endfor %}
             </div>
           </section>
@@ -480,7 +549,7 @@ table {
           {% if nav_dashboard.risk_items %}
           <div class="risk-bars">
             {% for etf in nav_dashboard.risk_items %}
-            <a class="risk-bar" href="#{{ etf.id }}"><span class="heat {{ etf.nav_heat_class }}" title="{{ etf.nav_heat_tip }}" aria-label="{{ etf.nav_heat_tip }}">{{ etf.nav_heat }}</span><span class="bar-name {{ etf.pnl_class }}">{{ etf.code }} {{ etf.name }}</span><span class="risk-track"><span class="risk-fill" style="width: {{ etf.risk_width }}%"></span></span><span>{{ etf.risk_text }}</span></a>
+            <a class="risk-bar filter-item" data-tags="{{ etf.filter_tags }}" href="#{{ etf.id }}"><span class="heat {{ etf.nav_heat_class }}" title="{{ etf.nav_heat_tip }}" aria-label="{{ etf.nav_heat_tip }}">{{ etf.nav_heat }}</span><span class="bar-name {{ etf.pnl_class }}">{{ etf.code }} {{ etf.name }}</span><span class="risk-track"><span class="risk-fill" style="width: {{ etf.risk_width }}%"></span></span><span>{{ etf.risk_text }}</span></a>
             {% endfor %}
           </div>
           {% else %}
@@ -490,7 +559,7 @@ table {
       </section>
       <div class="etf-list">
         {% for etf in etfs %}
-        <article class="etf-card" id="{{ etf.id }}">
+        <article class="etf-card filter-item" data-tags="{{ etf.filter_tags }}" id="{{ etf.id }}">
           <div class="etf-title">
             <h3><span class="etf-heading-name {{ etf.pnl_class }}"><span class="heat heat-mini {{ etf.nav_heat_class }}" title="{{ etf.nav_heat_tip }}" aria-label="{{ etf.nav_heat_tip }}">{{ etf.nav_heat }}</span>{{ etf.code }} {{ etf.name }}</span><span class="title-meta">{{ etf.title_meta | safe }}</span></h3>
             <div class="badges">{{ etf.action_pill | safe }}{{ etf.grid_pill | safe }}</div>
@@ -501,13 +570,13 @@ table {
             {% else %}
             <div class="table-scroll">
               <table class="dense">
-                <thead><tr><th>项</th><th>当前</th><th>参考</th><th>提醒</th></tr></thead>
+                <thead><tr><th>项</th><th>结论</th><th>当前</th><th>参考</th></tr></thead>
                 <tbody>
                   {% for row in etf.holding.rows %}
                   {% if row.merged %}
                   <tr><th>{{ row.label }}</th><td class="merged-cell" colspan="3">{{ row.content | safe }}</td></tr>
                   {% else %}
-                  <tr><th>{{ row.label }}</th><td>{{ row.current | safe }}</td><td>{{ row.reference | safe }}</td><td>{{ row.alert | safe }}</td></tr>
+                  <tr><th>{{ row.label }}</th><td>{{ row.alert | safe }}</td><td>{{ row.current | safe }}</td><td>{{ row.reference | safe }}</td></tr>
                   {% endif %}
                   {% endfor %}
                 </tbody>
@@ -579,16 +648,43 @@ table {
   <script>
 (() => {
   const root = document.querySelector(".nav-dashboard");
-  if (!root) return;
-  const buttons = Array.from(root.querySelectorAll(".tab-button"));
-  const panels = Array.from(root.querySelectorAll(".tab-panel"));
-  buttons.forEach((button) => {
+  const tabButtons = root ? Array.from(root.querySelectorAll(".tab-button")) : [];
+  const panels = root ? Array.from(root.querySelectorAll(".tab-panel")) : [];
+  const filterButtons = Array.from(document.querySelectorAll(".summary-card[data-filter]"));
+  const matchesFilter = (item, filter) => {
+    const tags = (item.dataset.tags || "all").split(/\s+/);
+    return filter === "all" || tags.includes(filter);
+  };
+  const refreshGroups = () => {
+    document.querySelectorAll(".filter-group").forEach((group) => {
+      const children = Array.from(group.querySelectorAll(".filter-item"));
+      const visible = children.filter((item) => !item.classList.contains("is-filtered-out")).length;
+      group.classList.toggle("is-filtered-out", visible === 0);
+      const counter = group.querySelector("[data-count]");
+      if (counter) counter.textContent = String(visible);
+      group.style.setProperty("--group-count", String(Math.max(1, visible)));
+    });
+  };
+  const applyFilter = (filter) => {
+    document.querySelectorAll(".filter-item").forEach((item) => {
+      item.classList.toggle("is-filtered-out", !matchesFilter(item, filter));
+    });
+    filterButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.filter === filter));
+    refreshGroups();
+  };
+  tabButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const tab = button.dataset.tab;
-      buttons.forEach((item) => item.classList.toggle("is-active", item === button));
+      tabButtons.forEach((item) => item.classList.toggle("is-active", item === button));
       panels.forEach((panel) => panel.classList.toggle("is-active", panel.dataset.panel === tab));
     });
   });
+  filterButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      applyFilter(button.dataset.filter || "all");
+    });
+  });
+  applyFilter("all");
 })();
   </script>
 </body>

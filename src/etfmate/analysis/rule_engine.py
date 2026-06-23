@@ -350,7 +350,7 @@ def _position_decision_from_short_trend(
     adjust_ratio = 0.0
     action = "WATCH"
     reasons = [
-        f"ShortTrendScore {score:.0f}，当前仓位 {current_ratio:.2%}",
+        f"趋势评分 {score:.0f}，当前仓位 {current_ratio:.2%}",
     ]
     warnings = list(filters["reasons"])
     blocked = set(filters["blocked_actions"])
