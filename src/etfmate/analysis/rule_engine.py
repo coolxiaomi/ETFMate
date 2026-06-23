@@ -11,7 +11,7 @@ ACTION_NAMES = {
     "LIGHT_OPEN": "轻仓建仓",
     "HOLD": "持有",
     "ADD": "加仓",
-    "HOLD_OR_ADD": "持有或加仓",
+    "HOLD_OR_ADD": "持有观察",
     "HOLD_OR_REDUCE": "持有或小幅减仓",
     "REDUCE": "减仓",
     "RISK_REVIEW": "风控复核",
@@ -119,9 +119,6 @@ def _trade_filters(market: MarketSnapshot, position: Position | None, category: 
         status = "限制交易" if status == "可交易" else status
         blocked.update({"买入", "加仓", "提高网格买入侧"})
         reasons.append("缺少成交额数据，新增买入需降级")
-    if position and position.available_quantity is not None and position.available_quantity <= 0:
-        blocked.update({"卖出", "减仓"})
-        reasons.append("可用数量为0，今日不应给可立即卖出的执行建议")
     return {"status": status, "blocked_actions": sorted(blocked), "reasons": reasons}
 
 
@@ -409,6 +406,7 @@ def _position_decision_from_short_trend(
                 action = "HOLD_OR_ADD"
                 adjust_ratio = 0.0
                 new_ratio = current_ratio
+                reasons = [reason for reason in reasons if "可按阶梯方式加仓" not in reason]
                 warnings.append("加仓条件未完全满足，需继续观察 MA5/MA10、ATR 和 BIAS 后再执行")
             else:
                 adjust_ratio = min(max(gap, 0.0), 0.20)
@@ -567,13 +565,9 @@ def _apply_filter_constraints(
     warnings: list[str],
 ) -> tuple[str, float, float, float]:
     buy_actions = {"OPEN", "LIGHT_OPEN", "ADD", "HOLD_OR_ADD"}
-    reduce_actions = {"REDUCE", "RISK_REVIEW", "EXIT_SHORT_TERM", "HOLD_OR_REDUCE"}
     if action in buy_actions and {"买入", "加仓", "提高网格买入侧"} & blocked:
         warnings.append("交易过滤限制新增买入，仓位动作降级为观察/持有")
         return ("HOLD" if holding else "WATCH"), current_ratio, current_ratio, 0.0
-    if action in reduce_actions and {"卖出", "减仓"} & blocked:
-        warnings.append("可用数量受限，不输出今日可立即执行的减仓/退出份额")
-        return "RISK_REVIEW", target_ratio, current_ratio, 0.0
     return action, target_ratio, new_ratio, adjust_ratio
 
 
@@ -587,11 +581,11 @@ def _action_copy(action: str, high_risk: bool, score: float) -> list[str]:
             return ["趋势评分较高但存在短线过热或波动放大，不适合直接追高"]
         return ["短线趋势强度不足或交易过滤受限，暂不进入建仓区"]
     if action == "HOLD":
-        return ["当前仓位与目标仓位基本匹配，继续观察持有"]
+        return ["当前仓位与目标仓位基本匹配，继续持有观察"]
     if action == "ADD":
         return ["短线趋势评分较高且目标仓位高于当前仓位，可按单次上限分步加仓"]
     if action == "HOLD_OR_ADD":
-        return ["目标仓位高于当前仓位，但加仓确认条件不足，先保持持有或等待回踩确认"]
+        return ["目标仓位高于当前仓位，但加仓确认条件不足，先持有观察"]
     if action == "REDUCE":
         return ["目标仓位低于当前仓位，建议降低部分仓位"]
     if action == "RISK_REVIEW":

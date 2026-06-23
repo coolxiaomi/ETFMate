@@ -68,11 +68,11 @@ def recommend(
         confidence = _num_or_zero(layer_payload.get("confidence"))
         total_score = _num_or_zero(layer_payload.get("total_score"))
         if confidence < 45 and action in {"建仓", "加仓"}:
-            action = "轻仓建仓" if not position else "持有或加仓"
+            action = "轻仓建仓" if not position else "持有观察"
             risks.append("七层证据置信度不足，强动作降级为保守仓位建议")
-        elif confidence < 45 and action in {"轻仓建仓", "持有或加仓"}:
+        elif confidence < 45 and action in {"轻仓建仓", "持有或加仓", "持有待加仓确认", "持有观察"}:
             risks.append("七层证据置信度不足，只适合小额试探，不适合扩大仓位")
-        if total_score <= -2 and action in {"建仓", "轻仓建仓", "加仓", "持有或加仓"}:
+        if total_score <= -2 and action in {"建仓", "轻仓建仓", "加仓", "持有或加仓", "持有待加仓确认", "持有观察"}:
             action = "观察" if not position else "持有"
             risks.append("多层证据偏弱，暂不把短线趋势信号直接解释为加仓信号")
         elif total_score >= 2 and action in {"减仓", "退出短线仓位"} and position and position.pnl_pct < 0:
@@ -96,7 +96,6 @@ def recommend(
         "watchlist_source_key": watch_item.source_key if watch_item else None,
         "watchlist_include_reason": watch_item.include_reason if watch_item else None,
         "quantity": position.quantity if position else None,
-        "available_quantity": position.available_quantity if position else None,
         "market_value": position.market_value if position else None,
         "position_pct": position.position_pct if position else None,
         "position_tier": position_tier,
@@ -258,7 +257,6 @@ def _candidate_source(position: Position | None, grid: GridConfig | None, watch_
 
 def _action_plan(action: str, position: Position | None, grid: GridConfig | None, rule_decision: dict[str, Any] | None = None) -> tuple[float | None, str]:
     quantity = position.quantity if position else None
-    available = position.available_quantity if position else None
     grid_qty = grid.order_quantity if grid else None
     target_pct = _num_or_zero((rule_decision or {}).get("target_position_pct"))
     new_pct = _num_or_zero((rule_decision or {}).get("new_position_pct"))
@@ -277,10 +275,8 @@ def _action_plan(action: str, position: Position | None, grid: GridConfig | None
     if action == "观察":
         return None, "保留观察，不新增买入或卖出动作"
     if action in {"减仓", "退出短线仓位", "风控复核"}:
-        if available is not None and available <= 0:
-            return None, "可用数量为0，本次只提示风控，不给今日可立即执行的减仓份额"
         if action == "风控复核":
-            return None, f"触发风控复核；目标仓位约 {target_pct:.1f}%，先人工确认可用数量和趋势状态"
+            return None, f"触发风控复核；目标仓位约 {target_pct:.1f}%，先人工确认趋势状态"
         ratio_qty = quantity * min(max(adjust_pct, 0.0), 100.0) / max(_num_or_zero((rule_decision or {}).get("current_position_pct")), 0.01)
         fallback = quantity * (0.5 if action == "退出短线仓位" else 0.3)
         target = min(grid_qty or ratio_qty or fallback, quantity * (0.5 if action == "退出短线仓位" else 0.3))
@@ -289,8 +285,8 @@ def _action_plan(action: str, position: Position | None, grid: GridConfig | None
         if action == "退出短线仓位":
             return suggested, f"先退出短线进攻仓约 {suggested:g} 份；新仓位参考 {new_pct:.1f}%，趋势未修复前降至观察仓"
         return suggested, f"先减约 {suggested:g} 份，剩余约 {keep:g} 份作为底仓继续观察；新仓位参考 {new_pct:.1f}%"
-    if action in {"加仓", "持有或加仓"}:
-        if action == "持有或加仓":
+    if action in {"加仓", "持有或加仓", "持有待加仓确认", "持有观察"}:
+        if action in {"持有或加仓", "持有待加仓确认", "持有观察"}:
             return None, f"目标仓位约 {target_pct:.1f}%，但确认条件不足；先持有，等待回踩或量能/ATR确认"
         ratio_qty = quantity * min(max(adjust_pct, 0.0), 100.0) / max(_num_or_zero((rule_decision or {}).get("current_position_pct")), 0.01)
         base = grid_qty or ratio_qty or quantity * 0.2
@@ -313,8 +309,10 @@ def _entry_plan(market: MarketSnapshot, action: str, rule_decision: dict[str, An
     if market.boll_lower:
         refs.append(f"BOLL下轨 {market.boll_lower:.3f}")
     ref_text = "，参考 " + " / ".join(refs) if refs else "，等待补齐 K 线参考价"
-    if action in {"建仓", "轻仓建仓", "加仓", "持有或加仓"}:
+    if action in {"建仓", "轻仓建仓", "加仓", "持有或加仓", "持有待加仓确认", "持有观察"}:
         prefix = "未持仓建仓" if watch_only else "加仓"
+        if action in {"持有或加仓", "持有待加仓确认", "持有观察"}:
+            prefix = "持有观察"
         return f"{prefix}: {target_text}，首笔不超过目标的1/3{ref_text}；不在明显远离 MA20 时追价"
     if action in {"观察", "持有"} and watch_only:
         return f"等待: {target_text}{ref_text}，等趋势修复或回踩确认后再建仓"

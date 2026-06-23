@@ -293,11 +293,13 @@ def _items(payload: Any, key: str) -> list:
 
 def _position(raw: dict) -> Position:
     code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "zqdm", "证券代码", "代码")))
+    quantity = _num(_pick(raw, "quantity", "amount", "holdAmount", "current_amount", "持仓数量", "持有数量", "股份余额", default=0))
+    available = _maybe_num(_pick(raw, "available_quantity", "enableAmount", "availableAmount", "可用数量", "可卖数量", default=None))
     return Position(
         code=code,
         name=str(_pick(raw, "name", "证券名称", "名称", default=code)),
-        quantity=_num(_pick(raw, "quantity", "amount", "holdAmount", "current_amount", "持仓数量", "持有数量", "股份余额", default=0)),
-        available_quantity=_num(_pick(raw, "available_quantity", "enableAmount", "availableAmount", "可用数量", "可卖数量", default=0)),
+        quantity=quantity,
+        available_quantity=available if available is not None else quantity,
         cost_price=_num(_pick(raw, "cost_price", "costPrice", "成本价", "成本", "持仓成本", default=0)),
         last_price=_num(_pick(raw, "last_price", "lastPrice", "currentPrice", "现价", "最新价", default=0)),
         market_value=_num(_pick(raw, "market_value", "marketValue", "参考市值", "市值", "持仓市值", default=0)),
@@ -366,9 +368,18 @@ def _watch_item(raw: dict) -> WatchItem:
 def _watchlist_from_account(account: dict) -> tuple[list[WatchItem], list[dict]]:
     watch_items = _items(account, "watchlist")
     filtered = _items(account, "watchlist_filtered_out")
-    if not watch_items and isinstance(account, dict) and isinstance(account.get("snapshot"), dict):
-        watch_items, filtered = ths_account.extract_watchlist(account["snapshot"])
-    return [_watch_item(item) for item in watch_items], [item for item in filtered if isinstance(item, dict)]
+    clean_watch_items = [
+        item
+        for item in watch_items
+        if isinstance(item, dict) and not ths_account.is_position_cache_source_key(item.get("source_key"))
+    ]
+    dirty_watch_items = [
+        {**item, "filter_reason": "排除同花顺持仓缓存，不作为自选ETF池"}
+        for item in watch_items
+        if isinstance(item, dict) and ths_account.is_position_cache_source_key(item.get("source_key"))
+    ]
+    clean_filtered = [item for item in filtered if isinstance(item, dict)]
+    return [_watch_item(item) for item in clean_watch_items], clean_filtered + dirty_watch_items
 
 
 def _prefer_name(current: str, candidate: str, code: str) -> str:

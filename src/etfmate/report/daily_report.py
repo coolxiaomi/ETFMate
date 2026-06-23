@@ -97,7 +97,7 @@ def _etf_view(item: dict) -> dict[str, Any]:
     grid_short = _compact_grid_action(grid_action)
     is_held = bool(rec and (_float_or_none(rec.get("quantity")) or 0) > 0)
     is_grid = bool(grid)
-    is_pool = bool(rec and (rec.get("is_watchlist_candidate") or "自选ETF池" in str(rec.get("candidate_source") or "")))
+    is_pool = _is_clean_watchlist_item(rec)
     trend_score = _float_or_none(rec.get("rule_trend_score")) if rec else None
     return {
         "id": f"etf-{_anchor(code)}",
@@ -822,7 +822,7 @@ def _filtered_risks(item: dict) -> list[str]:
     return [
         str(risk)
         for risk in (item.get("risks") or [])
-        if not str(risk).startswith("行情数据完整性:")
+        if not str(risk).startswith("行情数据完整性:") and not _is_internal_guardrail_text(str(risk))
     ]
 
 
@@ -928,8 +928,6 @@ def _rule_score_alert(item: dict) -> str:
         return _span("触发硬过滤", "danger")
     if {"买入", "加仓", "提高网格买入侧"} & set(blocked):
         return _span("限制新增买入", "warn")
-    if {"卖出", "减仓"} & set(blocked):
-        return _span("可卖数量受限", "attention")
     if risk is not None and risk >= 70:
         return _span("风险评分偏高", "danger")
     return _span("规则允许正常复核", "neutral")
@@ -1085,6 +1083,9 @@ def _simplify_direction_text(value: Any) -> str:
     text = str(value)
     replacements = {
         "ShortTrendScore": "趋势评分",
+        "持有或加仓": "持有观察",
+        "持有待加仓确认": "持有观察",
+        "持有待确认": "持有观察",
         "暂停买入侧": "停买",
         "暂停买入": "停买",
         "降低买入侧": "降低买",
@@ -1100,6 +1101,29 @@ def _simplify_direction_text(value: Any) -> str:
     for old, new in replacements.items():
         text = text.replace(old, new)
     return text
+
+
+def _is_clean_watchlist_item(item: dict | None) -> bool:
+    if not item or not item.get("is_watchlist_candidate"):
+        return False
+    return not _is_position_cache_source_key(item.get("watchlist_source_key"))
+
+
+def _is_position_cache_source_key(value: Any) -> bool:
+    text = str(value or "").lower()
+    return any(token in text for token in ("defaultpositioin", "defaultposition", "positionlist"))
+
+
+def _is_internal_guardrail_text(text: str) -> bool:
+    return any(
+        phrase in text
+        for phrase in (
+            "今日不应给",
+            "不生成今日",
+            "不输出今日",
+            "今日可立即执行",
+        )
+    )
 
 
 def _color_number(value: Any, suffix: str = "") -> str:
@@ -1147,6 +1171,8 @@ def _signed_metric_pct(value: Any) -> str:
 
 
 def _action_class(action: str) -> str:
+    if "持有待" in action or "持有或加仓" in action or "持有观察" in action:
+        return "attention"
     if "暂停" in action:
         return "action-pause"
     if "风控" in action:
@@ -1223,8 +1249,10 @@ def _compact_action(action: str) -> str:
         return "风控复核"
     if "退出" in action:
         return "退出短线"
+    if "持有待" in action or "持有观察" in action:
+        return "持有"
     if "持有或加仓" in action:
-        return "持有/加仓"
+        return "持有"
     if "轻仓建仓" in action:
         return "轻仓建仓"
     if "分批买入" in action:

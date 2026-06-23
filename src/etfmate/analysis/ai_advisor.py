@@ -16,7 +16,7 @@ def build_ai_review_input(recommendations: list[dict], grid_advices: list[dict])
         "instructions": (
             "你是当前宿主 AI 工具的 ETF 组合风控和网格交易复核助手。只基于 items 中的结构化证据研判，"
             "不得编造行情、新闻、研报或公告；不得承诺收益；不得给满仓/梭哈建议。规则引擎的硬过滤、"
-            "可用数量、流动性约束和数据缺失降级必须优先。输出写入 ai_judgements.json。"
+            "流动性约束、仓位约束和数据缺失降级必须优先。输出写入 ai_judgements.json。"
         ),
         "schema": {
             "items": [
@@ -86,7 +86,6 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
                 },
                 "position": {
                     "quantity": item.get("quantity"),
-                    "available_quantity": item.get("available_quantity"),
                     "position_pct": item.get("position_pct"),
                     "pnl_pct": item.get("pnl_pct"),
                     "note": item.get("investor_note"),
@@ -168,6 +167,9 @@ def _fallback_item(code: str, reason: str) -> dict[str, Any]:
 
 
 def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
+    if _contains_stale_sellable_assumption(item):
+        code = str(item.get("code") or "")
+        return _fallback_item(code, "宿主 AI 研判基于旧规则，需按最新规则重新复核")
     return {
         "code": str(item.get("code") or ""),
         "enabled": True,
@@ -194,3 +196,11 @@ def _list_text(value: Any) -> list[str]:
     if value in (None, ""):
         return []
     return [str(value)]
+
+
+def _contains_stale_sellable_assumption(item: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(item.get(key) or "")
+        for key in ("ai_action", "judgement", "final_bias", "conflicts", "guardrails")
+    )
+    return any(token in text for token in ("可用数量", "可卖数量", "今日不可卖", "今日不应", "今日可立即"))

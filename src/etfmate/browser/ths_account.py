@@ -98,9 +98,6 @@ def collect(root: Path, out_dir: Path) -> dict:
     closed_positions = _dedupe(_extract_records(closed_records, _looks_like_closed_position), "code", "证券代码", "symbol", "名称")
     watchlist, filtered = extract_watchlist(watchlist_snapshot)
     watchlist_source_url = str(watchlist_snapshot.get("url") or THS_WATCHLIST_URL)
-    if not watchlist:
-        watchlist, filtered = extract_watchlist(snapshot)
-        watchlist_source_url = str(snapshot.get("url") or THS_POSITION_URL)
     return {
         "positions": positions,
         "trades": trades,
@@ -112,7 +109,7 @@ def collect(root: Path, out_dir: Path) -> dict:
             "filtered": len(filtered),
             "source_url": watchlist_source_url,
             "canonical_url": THS_WATCHLIST_URL,
-            "note": "优先从同花顺投资账本自选页提取 ETF 池；自选页无结果时才退回持仓页缓存/DOM，按 ETF/LOF/场内基金规则过滤",
+            "note": "仅从同花顺投资账本自选页提取 ETF 池；排除持仓缓存，按 ETF/LOF/场内基金规则过滤",
         },
         "snapshot": snapshot,
         "closed_snapshot": closed_snapshot,
@@ -227,6 +224,8 @@ def _watchlist_storage_records(storage: dict[str, Any], source: str) -> list[dic
     for key, value in storage.items():
         source_key = f"{source}:{key}"
         key_text = str(key).lower()
+        if is_position_cache_source_key(source_key):
+            continue
         parsed = _json_value(value)
         key_suggests_watchlist = any(
             token in key_text
@@ -237,9 +236,6 @@ def _watchlist_storage_records(storage: dict[str, Any], source: str) -> list[dic
                 "favorite",
                 "fav",
                 "self",
-                "defaultpositioin",
-                "defaultposition",
-                "positionlist",
                 "stock_item",
             )
         )
@@ -249,6 +245,11 @@ def _watchlist_storage_records(storage: dict[str, Any], source: str) -> list[dic
             if key_suggests_watchlist or _fund_like_code_or_name(enriched):
                 records.append(enriched)
     return records
+
+
+def is_position_cache_source_key(value: Any) -> bool:
+    text = str(value or "").lower()
+    return any(token in text for token in ("defaultpositioin", "defaultposition", "positionlist"))
 
 
 def _watchlist_records_from_text(text: str, source_key: str) -> list[dict]:

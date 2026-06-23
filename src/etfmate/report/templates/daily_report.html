@@ -397,6 +397,13 @@ table {
 }
 .dense thead th { background: var(--soft); font-weight: 800; white-space: nowrap; }
 .dense tbody th { width: 136px; background: #f7fafb; color: #314045; font-weight: 800; }
+.dense .item-col { width: 136px; }
+.dense .conclusion-col { width: 310px; }
+.dense .current-col, .dense .reference-col { width: auto; }
+.dense td.conclusion-cell, .dense th.conclusion-cell {
+  white-space: nowrap;
+  word-break: keep-all;
+}
 .merged-cell { line-height: 1.55; }
 .info-line { margin: 0 0 4px; max-width: 1180px; }
 .info-line:last-child { margin-bottom: 0; }
@@ -429,6 +436,24 @@ table {
   border-top: 1px dashed var(--line);
 }
 .is-filtered-out { display: none !important; }
+.scroll-top-button {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 30;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--text);
+  color: #fff;
+  font: inherit;
+  font-size: 20px;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+}
+.scroll-top-button:hover { background: var(--blue); }
 @media (max-width: 980px) {
   .page { width: min(100% - 18px, 1500px); padding-top: 10px; }
   .hero, .etf-title { display: block; }
@@ -570,13 +595,14 @@ table {
             {% else %}
             <div class="table-scroll">
               <table class="dense">
-                <thead><tr><th>项</th><th>结论</th><th>当前</th><th>参考</th></tr></thead>
+                <colgroup><col class="item-col"><col class="conclusion-col"><col class="current-col"><col class="reference-col"></colgroup>
+                <thead><tr><th>项</th><th class="conclusion-cell">结论</th><th>当前</th><th>参考</th></tr></thead>
                 <tbody>
                   {% for row in etf.holding.rows %}
                   {% if row.merged %}
                   <tr><th>{{ row.label }}</th><td class="merged-cell" colspan="3">{{ row.content | safe }}</td></tr>
                   {% else %}
-                  <tr><th>{{ row.label }}</th><td>{{ row.alert | safe }}</td><td>{{ row.current | safe }}</td><td>{{ row.reference | safe }}</td></tr>
+                  <tr><th>{{ row.label }}</th><td class="conclusion-cell">{{ row.alert | safe }}</td><td>{{ row.current | safe }}</td><td>{{ row.reference | safe }}</td></tr>
                   {% endif %}
                   {% endfor %}
                 </tbody>
@@ -645,12 +671,14 @@ table {
       {% endif %}
     </section>
   </main>
+  <button class="scroll-top-button" type="button" title="回到顶部" aria-label="回到顶部">↑</button>
   <script>
 (() => {
   const root = document.querySelector(".nav-dashboard");
   const tabButtons = root ? Array.from(root.querySelectorAll(".tab-button")) : [];
   const panels = root ? Array.from(root.querySelectorAll(".tab-panel")) : [];
   const filterButtons = Array.from(document.querySelectorAll(".summary-card[data-filter]"));
+  const topButton = document.querySelector(".scroll-top-button");
   const matchesFilter = (item, filter) => {
     const tags = (item.dataset.tags || "all").split(/\s+/);
     return filter === "all" || tags.includes(filter);
@@ -684,6 +712,11 @@ table {
       applyFilter(button.dataset.filter || "all");
     });
   });
+  if (topButton) {
+    topButton.addEventListener("click", () => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
   applyFilter("all");
 })();
   </script>
