@@ -54,7 +54,12 @@ def normalize_host_ai_judgements(payload: Any, recommendations: list[dict]) -> d
     else:
         rows = []
 
-    result = {str(item.get("code")): _normalize_item(item) for item in rows if isinstance(item, dict) and item.get("code")}
+    valid_codes = {str(item.get("code") or "") for item in recommendations if item.get("code")}
+    result = {
+        str(item.get("code")): _normalize_item(item)
+        for item in rows
+        if isinstance(item, dict) and item.get("code") and str(item.get("code")) in valid_codes
+    }
     for item in recommendations:
         code = str(item.get("code") or "")
         result.setdefault(code, _fallback_item(code, "宿主 AI 未返回该 ETF 的研判"))

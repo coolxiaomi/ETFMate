@@ -33,10 +33,10 @@ def advise_grid(
     strong_positive = bool(market.boll_upper and market.last_price >= market.boll_upper * 0.95 and (market.bias6 or 0) > 2)
     low_zone = bool(market.boll_lower and market.last_price <= market.boll_lower * 1.08 and (market.bias6 or 0) < -1)
 
-    pause_buy_side = grid.enabled and hard_weak and (high_position or deep_loss)
-    reduce_buy_side = grid.enabled and soft_weak and not pause_buy_side
+    hard_reduce_buy_side = grid.enabled and hard_weak and (high_position or deep_loss)
+    reduce_buy_side = grid.enabled and (soft_weak or hard_reduce_buy_side)
 
-    if current_step and market.atr14_pct and not pause_buy_side:
+    if current_step and market.atr14_pct and not hard_reduce_buy_side:
         if current_step < 0.6 * market.atr14_pct:
             action = "调宽网格"
             reasons.append("当前网格间距小于 0.6 倍 ATR14，容易产生噪音交易")
@@ -50,11 +50,11 @@ def advise_grid(
         else:
             reasons.append("当前网格间距与 ATR14 波动率基本匹配")
 
-    if pause_buy_side:
-        action = "暂停买入侧"
+    if hard_reduce_buy_side:
+        action = "降低买入侧"
         reasons = [reason for reason in reasons if "网格间距" not in reason]
-        reasons.append("价格同时低于 MA20/MA60，且仓位或亏损压力不低；含义是买入侧不再触发，卖出侧纪律保留，不是关闭整个条件单")
-        suggested_buy_qty = 0
+        reasons.append("价格同时低于 MA20/MA60，且仓位或亏损压力不低；Touker 数量不设为 0，本次改为买入侧降速并提示人工确认是否停用买触发")
+        suggested_buy_qty = _round_qty(base_lot_qty * 0.5)
         suggested_sell_qty = base_lot_qty
         suggested_buy_fall = grid.buy_fall_pct
         suggested_sell_rise = grid.sell_rise_pct
@@ -62,7 +62,7 @@ def advise_grid(
         action = "降低买入侧"
         reasons.append("价格低于 MA60 但尚未触发暂停条件，买入侧先降速，卖出侧保持")
         suggested_buy_qty = _round_qty(current_qty * 0.5)
-        suggested_sell_qty = current_qty
+        suggested_sell_qty = _round_qty(current_qty)
     elif strong_positive:
         suggested_buy_qty = _round_qty(current_qty * 0.5)
         suggested_sell_qty = _round_qty(current_qty * 1.5)
@@ -89,21 +89,21 @@ def advise_grid(
         trend_score = _num_or_zero(rule_decision.get("trend_score"))
         position_risk_level = str(rule_decision.get("risk_level") or "")
         if rule_action in {"禁止交易"}:
-            action = "暂停买入侧"
-            suggested_buy_qty = 0
+            action = "降低买入侧"
+            suggested_buy_qty = _round_qty(base_lot_qty * 0.5)
             suggested_sell_qty = base_lot_qty
             suggested_buy_fall = grid.buy_fall_pct
             suggested_sell_rise = grid.sell_rise_pct
-            reasons.append("操作建议触发禁止交易，网格买入侧先停用")
+            reasons.append("操作建议触发禁止交易；Touker 数量不设为 0，网格买入侧仅给一手倍数的保守降速建议")
         elif position_action in {"EXIT_SHORT_TERM", "RISK_REVIEW"} or rule_action in {"退出短线仓位", "风控复核"} or trend_score < 45:
-            action = "暂停买入侧"
-            suggested_buy_qty = 0
+            action = "降低买入侧"
+            suggested_buy_qty = _round_qty(base_lot_qty * 0.5)
             suggested_sell_qty = base_lot_qty
             suggested_buy_fall = grid.buy_fall_pct
             suggested_sell_rise = grid.sell_rise_pct
-            reasons.append("短线趋势评分转弱或操作建议触发风控复核，暂停买入侧，卖出侧纪律保留")
+            reasons.append("短线趋势评分转弱或操作建议触发风控复核；不输出 0 数量，买入侧改为保守降速，卖出侧纪律保留")
         elif position_action == "REDUCE" or rule_action == "减仓" or risk_score >= 70 or position_risk_level == "HIGH" or {"买入", "加仓", "提高网格买入侧"} & blocked:
-            if action not in {"暂停买入侧", "暂停网格"}:
+            if action != "维持网格并风险提示":
                 action = "降低买入侧"
             suggested_buy_qty = _round_qty((suggested_buy_qty or base_lot_qty) * 0.5)
             suggested_sell_qty = max(suggested_sell_qty or base_lot_qty, base_lot_qty)
@@ -121,11 +121,11 @@ def advise_grid(
             suggested_buy_fall = grid.buy_fall_pct
             suggested_sell_rise = grid.sell_rise_pct
             reasons.append("七层证据置信度不足，本次不做过细网格调参")
-        if total_score <= -2 and action not in {"暂停网格", "暂停买入侧"}:
+        if total_score <= -2 and action != "维持网格并风险提示":
             reasons.append("多层证据偏弱，买入侧按保守仓位执行")
             suggested_buy_qty = _round_qty((suggested_buy_qty or current_qty) * 0.5)
-        elif total_score >= 2 and action in {"暂停网格", "暂停买入侧"}:
-            reasons.append("多层证据未完全转弱，暂停后仍保留卖出侧纪律并观察修复")
+        elif total_score >= 2 and action in {"降低买入侧", "维持网格并风险提示"}:
+            reasons.append("多层证据未完全转弱，降低买入侧后仍保留卖出侧纪律并观察修复")
 
     if not reasons:
         reasons.append("缺少完整波动率或网格参数，建议先补齐数据")
@@ -161,8 +161,6 @@ def _round_pct(value: float) -> float:
 
 
 def _round_qty(value: float) -> float:
-    if value <= 0:
-        return 0
     return max(100, round(value / 100) * 100)
 
 

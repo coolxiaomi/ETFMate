@@ -75,13 +75,10 @@ def _group_by_etf(recommendations: list[dict], grid_advices: list[dict]) -> list
             order.append(code)
     for item in grid_advices:
         code = str(item.get("code") or "")
-        if not code:
+        if not code or code not in result:
             continue
-        result.setdefault(code, {"code": code, "recommendation": None, "grid": None})
         result[code]["grid"] = item
         result[code]["name"] = _preferred_name(result[code].get("name"), item.get("name"), code)
-        if code not in order:
-            order.append(code)
     return [result[code] for code in order]
 
 
@@ -244,14 +241,10 @@ def _portfolio_stats(recommendations: list[dict], grid_advices: list[dict], data
     held_count = _int_or_none(stats.get("positions_count"))
     if held_count is None:
         held_count = _data_count(data_completeness, "同花顺持仓")
-    grid_count = _int_or_none(stats.get("grids_count"))
-    if grid_count is None:
-        grid_count = _data_count(data_completeness, "Touker 网格")
+    grid_count = len(grid_advices)
     if held_count is None:
         held_count = sum(1 for item in recommendations if (_float_or_none(item.get("quantity")) or 0) > 0)
-    if grid_count is None:
-        grid_count = len(grid_advices)
-    all_count = len({str(item.get("code") or "") for item in recommendations + grid_advices if item.get("code")})
+    all_count = len({str(item.get("code") or "") for item in recommendations if item.get("code")})
     return {
         "held_count": held_count,
         "grid_count": grid_count,
@@ -334,7 +327,7 @@ def _nav_dashboard(etfs: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _action_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    order = ["加仓", "建仓", "持有", "等待", "减仓", "暂停买入", "卖出", "待定"]
+    order = ["加仓", "建仓", "持有", "观察/等待", "减仓", "暂停买入", "卖出", "待定"]
     groups: dict[str, list[dict[str, Any]]] = {}
     for etf in etfs:
         groups.setdefault(str(etf.get("nav_action") or "待定"), []).append(etf)
@@ -1007,8 +1000,7 @@ def _pill(text: str, cls: str) -> str:
 
 
 def _display_action(action: str) -> str:
-    text = "停买" if action == "暂停网格" else action
-    return _simplify_direction_text(text)
+    return _simplify_direction_text(action)
 
 
 def _preferred_name(current: Any, candidate: Any, code: str) -> str:
@@ -1086,8 +1078,8 @@ def _simplify_direction_text(value: Any) -> str:
         "持有或加仓": "持有观察",
         "持有待加仓确认": "持有观察",
         "持有待确认": "持有观察",
-        "暂停买入侧": "停买",
-        "暂停买入": "停买",
+        "暂停买入侧": "降低买",
+        "暂停买入": "降低买",
         "降低买入侧": "降低买",
         "提高买入侧": "提高买",
         "网格买入侧": "网格买",
@@ -1266,7 +1258,7 @@ def _compact_action(action: str) -> str:
     if "卖出" in action:
         return "卖出"
     if "观察" in action or "等待" in action:
-        return "等待"
+        return "观察/等待"
     if "持有" in action:
         return "持有"
     return action if action and action != "-" else "待定"
@@ -1275,9 +1267,9 @@ def _compact_action(action: str) -> str:
 def _compact_grid_action(action: str) -> str:
     display = _display_action(action)
     if "暂停" in display:
-        return "停买"
+        return "降买"
     if "停买" in display:
-        return "停买"
+        return "降买"
     if "降低买" in display:
         return "降买"
     if "调宽" in display:

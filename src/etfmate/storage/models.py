@@ -9,7 +9,6 @@ class Position:
     code: str
     name: str
     quantity: float
-    available_quantity: float | None
     cost_price: float
     last_price: float
     market_value: float

@@ -102,13 +102,15 @@ def run_analyze(root: Path, run_id: str) -> None:
     account = read_json(root / "data/raw/ths" / run_id / "account.json", default={})
     grid_payload = read_json(root / "data/raw/touker" / run_id / "grids.json", default={})
     positions = [_position(item) for item in _items(account, "positions")]
+    current_positions = [item for item in positions if (item.quantity or 0) > 0]
     trades = [_trade(item) for item in _items(account, "trades")]
     grids = [_grid(item) for item in _items(grid_payload, "grids")]
     watchlist, watchlist_filtered = _watchlist_from_account(account)
     _require_items({"positions": positions}, "positions", "缺少同花顺持仓数据，不能生成实时分析。")
     _require_items({"grids": grids}, "grids", "缺少 Touker 网格数据，不能生成实时分析。")
 
-    codes = sorted({*[item.code for item in positions], *[item.code for item in trades], *[item.code for item in grids], *[item.code for item in watchlist]})
+    universe_codes = {item.code for item in current_positions} | {item.code for item in watchlist}
+    codes = sorted(universe_codes)
     snapshots = [build_market_snapshot(code) for code in codes]
     watch_by_code = {item.code: item for item in watchlist}
     for snapshot in snapshots:
@@ -116,10 +118,10 @@ def run_analyze(root: Path, run_id: str) -> None:
         if watch and _prefer_name(snapshot.name, watch.name, snapshot.code) == watch.name:
             snapshot.name = watch.name
     snapshots_by_code = {item.code: item for item in snapshots}
-    positions_by_code = {item.code: item for item in positions}
+    positions_by_code = {item.code: item for item in current_positions}
     grids_by_code = {item.code: item for item in grids}
     layered_contexts = {
-        item.code: build_layered_context(positions_by_code.get(item.code), grids_by_code.get(item.code), item, positions)
+        item.code: build_layered_context(positions_by_code.get(item.code), grids_by_code.get(item.code), item, current_positions)
         for item in snapshots
     }
     recommendations = [
@@ -127,7 +129,7 @@ def run_analyze(root: Path, run_id: str) -> None:
             positions_by_code.get(item.code),
             grids_by_code.get(item.code),
             item,
-            all_positions=positions,
+            all_positions=current_positions,
             all_markets=snapshots,
             layered_context=layered_contexts.get(item.code),
             watch_item=watch_by_code.get(item.code),
@@ -144,7 +146,7 @@ def run_analyze(root: Path, run_id: str) -> None:
             rule_decision=rule_decisions.get(item.code),
         )
         for item in grids
-        if item.code in snapshots_by_code
+        if item.code in universe_codes and item.code in snapshots_by_code
     ]
     ai_review_input = build_ai_review_input(recommendations, grid_advices)
     write_json(root / "data/raw/market" / run_id / AI_REVIEW_INPUT_FILE, ai_review_input)
@@ -154,7 +156,7 @@ def run_analyze(root: Path, run_id: str) -> None:
     payload = {
         "run_id": run_id,
         "analysis_time": _analysis_time(run_id),
-        "positions_count": len(positions),
+        "positions_count": len(current_positions),
         "grids_count": len(grids),
         "watchlist_count": len(watchlist),
         "watchlist_filtered_count": len(watchlist_filtered),
@@ -189,7 +191,7 @@ def run_report(root: Path, run_id: str) -> None:
     if analysis.get("trade_reviews"):
         review = {**review, "periods": analysis["trade_reviews"]}
 
-    positions_count = len(_items(account, "positions"))
+    positions_count = sum(1 for item in (_position(raw) for raw in _items(account, "positions")) if (item.quantity or 0) > 0)
     trades_count = len(_items(account, "trades"))
     closed_count = len(_items(account, "closed_positions"))
     watchlist, watchlist_filtered = _watchlist_from_account(account)
@@ -294,12 +296,10 @@ def _items(payload: Any, key: str) -> list:
 def _position(raw: dict) -> Position:
     code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "zqdm", "证券代码", "代码")))
     quantity = _num(_pick(raw, "quantity", "amount", "holdAmount", "current_amount", "持仓数量", "持有数量", "股份余额", default=0))
-    available = _maybe_num(_pick(raw, "available_quantity", "enableAmount", "availableAmount", "可用数量", "可卖数量", default=None))
     return Position(
         code=code,
         name=str(_pick(raw, "name", "证券名称", "名称", default=code)),
         quantity=quantity,
-        available_quantity=available if available is not None else quantity,
         cost_price=_num(_pick(raw, "cost_price", "costPrice", "成本价", "成本", "持仓成本", default=0)),
         last_price=_num(_pick(raw, "last_price", "lastPrice", "currentPrice", "现价", "最新价", default=0)),
         market_value=_num(_pick(raw, "market_value", "marketValue", "参考市值", "市值", "持仓市值", default=0)),

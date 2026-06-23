@@ -294,7 +294,7 @@ def _action_plan(action: str, position: Position | None, grid: GridConfig | None
         suggested = min(_round_lot(base), _round_lot(cap))
         return suggested, f"参考加仓 {suggested:g} 份，分批执行；目标仓位约 {target_pct:.1f}%，本次后参考 {new_pct:.1f}%"
     if action in {"暂停网格", "暂停买入侧"}:
-        return 0, "暂停买入侧；已有持仓保留底仓，优先等趋势修复"
+        return None, "暂停新增买入；已有持仓保留底仓，优先等趋势修复"
     return None, "维持当前仓位，按网格纪律执行"
 
 
