@@ -49,6 +49,8 @@ def recommend(
         scores.append(f"ATR14 {market.atr14_pct:.2f}%")
     if market.bias6 is not None:
         scores.append(f"BIAS6 {market.bias6:.2f}%")
+    if market.macd_dif is not None and market.macd_dea is not None:
+        scores.append(f"MACD DIF {market.macd_dif:.3f}/DEA {market.macd_dea:.3f}")
     if market.vol_ma5 and market.vol_ma20:
         scores.append(f"VOL5/20 {market.vol_ma5 / market.vol_ma20:.2f}倍")
 
@@ -196,6 +198,9 @@ def recommend(
         "amount_avg20": market.amount_avg20,
         "amount_ratio20": market.amount_ratio20,
         "rsi14": market.rsi14,
+        "macd_dif": market.macd_dif,
+        "macd_dea": market.macd_dea,
+        "macd_hist": market.macd_hist,
         "ret3": market.ret3,
         "ret5": market.ret5,
         "ret20": market.ret20,

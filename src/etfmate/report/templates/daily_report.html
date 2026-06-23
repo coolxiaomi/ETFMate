@@ -354,7 +354,7 @@ table {
   word-break: break-word;
 }
 .dense thead th { background: var(--soft); font-weight: 800; white-space: nowrap; }
-.dense tbody th { width: 112px; background: #f7fafb; color: #314045; font-weight: 800; }
+.dense tbody th { width: 136px; background: #f7fafb; color: #314045; font-weight: 800; }
 .merged-cell { line-height: 1.55; }
 .info-line { margin: 0 0 4px; max-width: 1180px; }
 .info-line:last-child { margin-bottom: 0; }
@@ -423,11 +423,6 @@ table {
           <button class="tab-button" type="button" data-tab="risk">风险</button>
         </div>
         <div class="tab-panel is-active" data-panel="decision">
-          <div class="metric-row">
-            {% for group in nav_dashboard.decision_groups %}
-            <span class="metric-chip"><span class="heat {{ group.heat_class }}">{{ group.heat }}</span>{{ group.meaning }} {{ group.etfs|length }}</span>
-            {% endfor %}
-          </div>
           {% for group in nav_dashboard.action_groups %}
           <section class="cluster">
             <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> {{ group.count }}</h3>

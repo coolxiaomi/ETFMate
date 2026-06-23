@@ -44,7 +44,7 @@ class WebAccessSession:
                 pass
 
     def open(self, url: str) -> None:
-        payload = self._request_json("GET", f"/new?url={urllib.parse.quote(url, safe=URL_SAFE_CHARS)}")
+        payload = self._request_json("POST", "/new", data=url)
         target = _pick_target_id(payload)
         if not target:
             raise WebAccessNotReadyError(f"web-access /new 未返回 target id: {payload!r}")
@@ -52,7 +52,7 @@ class WebAccessSession:
 
     def navigate(self, url: str) -> None:
         self._require_target()
-        self._request_text("GET", f"/navigate?target={urllib.parse.quote(self.target_id or '')}&url={urllib.parse.quote(url, safe=URL_SAFE_CHARS)}")
+        self._request_text("POST", f"/navigate?target={urllib.parse.quote(self.target_id or '')}", data=url)
 
     def eval(self, script: str) -> Any:
         self._require_target()

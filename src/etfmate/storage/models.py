@@ -106,6 +106,9 @@ class MarketSnapshot:
     amount_avg20: float | None = None
     amount_ratio20: float | None = None
     rsi14: float | None = None
+    macd_dif: float | None = None
+    macd_dea: float | None = None
+    macd_hist: float | None = None
     ret3: float | None = None
     ret5: float | None = None
     ret20: float | None = None

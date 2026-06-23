@@ -46,6 +46,11 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     rs = gain / loss.replace(0, pd.NA)
     out["rsi14"] = 100 - (100 / (1 + rs))
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    out["macd_dif"] = ema12 - ema26
+    out["macd_dea"] = out["macd_dif"].ewm(span=9, adjust=False).mean()
+    out["macd_hist"] = (out["macd_dif"] - out["macd_dea"]) * 2
     for window in (3, 5, 20, 60):
         out[f"ret{window}"] = (close / close.shift(window) - 1) * 100
     rolling_peak = close.rolling(60).max()

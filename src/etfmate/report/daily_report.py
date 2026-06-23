@@ -128,6 +128,7 @@ def _holding_view(item: dict | None, grid: dict | None = None) -> dict[str, Any]
         _row("ATR(真实波幅)", _atr_summary(item), _atr_compare(item), _atr_alert(item)),
         _row("BIAS(乖离率)", _bias_summary(item), _bias_compare(item), _bias_alert(item)),
         _row("RSI(相对强弱)", _rsi_summary(item), _rsi_compare(item), _rsi_alert(item)),
+        _row("MACD(指数平滑异同)", _macd_summary(item), _macd_compare(item), _macd_alert(item)),
         _row("规则", _rule_score_summary(item), _rule_score_detail(item), _rule_score_alert(item)),
         _merged_row("动作", _action_merged_html(item)),
         _merged_row("AI", _ai_judgement_html(item)),
@@ -607,6 +608,37 @@ def _rsi_alert(item: dict) -> str:
     if rsi14 <= 30:
         return _span("偏弱/超卖，反弹需确认", "attention")
     return _span("强弱中性", "neutral")
+
+
+def _macd_summary(item: dict) -> str:
+    return "；".join(
+        [
+            f"DIF: {_num(item.get('macd_dif'), 4)}",
+            f"DEA: {_num(item.get('macd_dea'), 4)}",
+            f"柱: {_num(item.get('macd_hist'), 4)}",
+        ]
+    )
+
+
+def _macd_compare(item: dict) -> str:
+    return _cell_html("DIF>DEA偏多；DIF<DEA偏空；柱线扩大代表动能增强")
+
+
+def _macd_alert(item: dict) -> str:
+    dif = _float_or_none(item.get("macd_dif"))
+    dea = _float_or_none(item.get("macd_dea"))
+    hist = _float_or_none(item.get("macd_hist"))
+    if dif is None or dea is None or hist is None:
+        return _cell_html("MACD数据不足")
+    if dif > dea and hist > 0 and dif > 0 and dea > 0:
+        return _span("零轴上方多头，动能偏强", "profit")
+    if dif > dea and hist > 0:
+        return _span("DIF在DEA上方，短线修复", "attention")
+    if dif < dea and hist < 0 and dif < 0 and dea < 0:
+        return _span("零轴下方空头，趋势偏弱", "loss strong")
+    if dif < dea and hist < 0:
+        return _span("DIF在DEA下方，动能转弱", "warn")
+    return _span("多空接近，等待方向确认", "neutral")
 
 
 def _action_merged_html(item: dict) -> str:
