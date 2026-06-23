@@ -654,6 +654,8 @@ def _action_merged_html(item: dict) -> str:
         _inline_label("交易过滤", item.get("rule_filter_status")),
         _inline_label("持仓备注", item.get("investor_note")),
         _inline_label("仓位", _position_text(item)),
+        _inline_label("目标", _position_decision_text(item)),
+        _inline_label("风险等级", item.get("position_risk_level")),
         _inline_label("执行计划", item.get("position_plan")),
         _inline_label("入场计划", item.get("entry_plan")),
         _inline_label("决策依据", "；".join(_filtered_action_reasons(item))),
@@ -770,6 +772,14 @@ def _position_text(item: dict) -> str:
     return f"{pct}，{tier}，市值 {value}"
 
 
+def _position_decision_text(item: dict) -> str:
+    target = _pct(item.get("target_position_pct"))
+    new_position = _pct(item.get("new_position_pct"))
+    adjust = _signed_pct(item.get("adjust_pct")) if item.get("adjust_pct") is not None else "-"
+    action = _cell(item.get("position_action"))
+    return f"目标 {target}，本次后 {new_position}，调整 {adjust}，枚举 {action}"
+
+
 def _grid_row(label: str, current: Any, suggested: Any, suffix: str) -> dict[str, Any]:
     changed = _changed(current, suggested)
     return _row(
@@ -817,8 +827,10 @@ def _rule_score_detail(item: dict) -> str:
                 f"短线趋势 {rule.get('trend_level') or '-'}",
                 trend_parts,
                 f"标签 {tags}" if tags else "",
-                f"风险 {rule.get('risk_level') or '-'}",
-                f"目标仓位 {_pct(rule.get('target_position_pct'))}",
+                f"仓位动作 {rule.get('position_action') or '-'} / {rule.get('action_name') or rule.get('action') or '-'}",
+                f"风险等级 {rule.get('risk_level') or '-'}",
+                f"当前/目标/本次后 {_pct(rule.get('current_position_pct'))}/{_pct(rule.get('target_position_pct'))}/{_pct(rule.get('new_position_pct'))}",
+                f"调整 {_signed_pct(rule.get('adjust_pct'))}",
             ]
             if part
         )
@@ -999,9 +1011,11 @@ def _signed_metric_pct(value: Any) -> str:
 def _action_class(action: str) -> str:
     if "暂停" in action:
         return "action-pause"
+    if "风控" in action:
+        return "action-pause"
     if any(word in action for word in ("买入", "加仓", "建仓")):
         return "action-buy"
-    if any(word in action for word in ("减仓", "卖出")):
+    if any(word in action for word in ("减仓", "卖出", "退出")):
         return "action-sell"
     return "neutral"
 
@@ -1067,6 +1081,14 @@ def _trend_heat(value: Any, trend_code: Any = None) -> tuple[str, str]:
 def _compact_action(action: str) -> str:
     if "暂停" in action:
         return "暂停买入"
+    if "风控" in action:
+        return "风控复核"
+    if "退出" in action:
+        return "退出短线"
+    if "持有或加仓" in action:
+        return "持有/加仓"
+    if "轻仓建仓" in action:
+        return "轻仓建仓"
     if "分批买入" in action:
         return "分批加仓"
     if "买入" in action or "加仓" in action:

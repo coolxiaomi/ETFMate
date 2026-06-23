@@ -83,20 +83,34 @@ def advise_grid(
 
     if rule_decision:
         rule_action = str(rule_decision.get("action") or "")
+        position_action = str(rule_decision.get("position_action") or "")
         blocked = set(rule_decision.get("blocked_actions") or [])
         risk_score = _num_or_zero(rule_decision.get("risk_score"))
-        if rule_action in {"禁止交易", "卖出"}:
+        trend_score = _num_or_zero(rule_decision.get("trend_score"))
+        position_risk_level = str(rule_decision.get("risk_level") or "")
+        if rule_action in {"禁止交易"}:
             action = "暂停买入侧"
             suggested_buy_qty = 0
             suggested_sell_qty = base_lot_qty
             suggested_buy_fall = grid.buy_fall_pct
             suggested_sell_rise = grid.sell_rise_pct
-            reasons.append("规则引擎触发禁止交易/退出信号，网格买入侧先停用")
-        elif rule_action == "减仓" or risk_score >= 70 or {"买入", "加仓", "提高网格买入侧"} & blocked:
+            reasons.append("操作建议触发禁止交易，网格买入侧先停用")
+        elif position_action in {"EXIT_SHORT_TERM", "RISK_REVIEW"} or rule_action in {"退出短线仓位", "风控复核"} or trend_score < 45:
+            action = "暂停买入侧"
+            suggested_buy_qty = 0
+            suggested_sell_qty = base_lot_qty
+            suggested_buy_fall = grid.buy_fall_pct
+            suggested_sell_rise = grid.sell_rise_pct
+            reasons.append("短线趋势评分转弱或操作建议触发风控复核，暂停买入侧，卖出侧纪律保留")
+        elif position_action == "REDUCE" or rule_action == "减仓" or risk_score >= 70 or position_risk_level == "HIGH" or {"买入", "加仓", "提高网格买入侧"} & blocked:
             if action not in {"暂停买入侧", "暂停网格"}:
                 action = "降低买入侧"
-            suggested_buy_qty = _round_qty((suggested_buy_qty or current_qty) * 0.5)
-            reasons.append("规则评分显示风险或流动性约束，买入侧按保守仓位执行")
+            suggested_buy_qty = _round_qty((suggested_buy_qty or base_lot_qty) * 0.5)
+            suggested_sell_qty = max(suggested_sell_qty or base_lot_qty, base_lot_qty)
+            reasons.append("操作建议偏减仓或风险等级偏高，网格买入侧按保守仓位执行")
+        elif position_action in {"ADD", "OPEN", "LIGHT_OPEN", "HOLD_OR_ADD"} and trend_score >= 75 and position_risk_level == "LOW":
+            if action == "维持":
+                reasons.append("操作建议偏加仓/建仓且趋势评分不低于75，网格可维持运行，但仍按仓位上限控制买入侧")
 
     layer_payload = normalize_context(layered_context)
     if layer_payload:

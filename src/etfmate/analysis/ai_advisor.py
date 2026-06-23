@@ -112,6 +112,7 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
                 },
                 "rule": {
                     "action": item.get("action"),
+                    "position_action": rule.get("position_action") or item.get("position_action"),
                     "action_quantity": item.get("action_quantity"),
                     "score": rule.get("total_score"),
                     "trend": rule.get("trend_score"),
@@ -122,6 +123,9 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
                     "risk": rule.get("risk_score"),
                     "filter_status": rule.get("filter_status"),
                     "target_position_pct": rule.get("target_position_pct") or item.get("target_position_pct"),
+                    "new_position_pct": rule.get("new_position_pct") or item.get("new_position_pct"),
+                    "adjust_pct": rule.get("adjust_pct") or item.get("adjust_pct"),
+                    "position_risk_level": rule.get("risk_level") or item.get("position_risk_level"),
                     "entry_plan": item.get("entry_plan"),
                     "position_plan": item.get("position_plan"),
                     "blocked_actions": rule.get("blocked_actions"),
