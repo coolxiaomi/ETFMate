@@ -96,7 +96,7 @@ h3 { font-size: 16px; display: flex; gap: 8px; align-items: baseline; flex-wrap:
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 220px;
+  max-width: 250px;
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 4px 6px;
@@ -221,6 +221,14 @@ h3 { font-size: 16px; display: flex; gap: 8px; align-items: baseline; flex-wrap:
 .heat-flat { background: #52616a; }
 .heat-cool { background: #0f8a4b; }
 .heat-cold { background: #1e3a8a; }
+.heat-mini {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
 .nav-main {
   min-width: 0;
   display: grid;
@@ -346,7 +354,7 @@ table {
   word-break: break-word;
 }
 .dense thead th { background: var(--soft); font-weight: 800; white-space: nowrap; }
-.dense tbody th { width: 82px; background: #f7fafb; color: #314045; font-weight: 800; }
+.dense tbody th { width: 112px; background: #f7fafb; color: #314045; font-weight: 800; }
 .merged-cell { line-height: 1.55; }
 .info-line { margin: 0 0 4px; max-width: 1180px; }
 .info-line:last-child { margin-bottom: 0; }
@@ -425,7 +433,7 @@ table {
             <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> {{ group.count }}</h3>
             <div class="mini-list">
               {% for etf in group.etfs %}
-              <a class="mini-chip" href="#{{ etf.id }}"><span class="mini-code {{ etf.pnl_class }}">{{ etf.code }}</span><span class="mini-name">{{ etf.name }}</span><span class="mini-pnl {{ etf.pnl_class }}">{{ etf.pnl_text }}</span></a>
+              <a class="mini-chip" href="#{{ etf.id }}"><span class="heat heat-mini {{ etf.nav_heat_class }}">{{ etf.nav_heat }}</span><span class="mini-code {{ etf.pnl_class }}">{{ etf.code }}</span><span class="mini-name">{{ etf.name }}</span><span class="mini-pnl {{ etf.pnl_class }}">{{ etf.pnl_text }}</span></a>
               {% endfor %}
             </div>
           </section>

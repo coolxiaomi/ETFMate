@@ -122,12 +122,12 @@ def _holding_view(item: dict | None, grid: dict | None = None) -> dict[str, Any]
     if not item:
         return {"empty": True, "message": "无当前持仓或行情建议。", "rows": []}
     rows = [
-        _row("持", _holding_summary(item), _price_summary(item), _pnl_alert(item.get("pnl_pct"))),
         _row("BOLL", _boll_summary(item), _boll_levels(item), _boll_alert(item)),
         _row("MA", _ma_summary(item), _ma_compare(item), _ma_alert(item)),
-        _row("VOL", _volume_summary(item), _volume_compare(item), _volume_alert(item)),
-        _row("ATR", _atr_summary(item), _atr_compare(item), _atr_alert(item)),
-        _row("BIAS", _bias_summary(item), _bias_compare(item), _bias_alert(item)),
+        _row("VOL(成交量)", _volume_summary(item), _volume_compare(item), _volume_alert(item)),
+        _row("ATR(真实波幅)", _atr_summary(item), _atr_compare(item), _atr_alert(item)),
+        _row("BIAS(乖离率)", _bias_summary(item), _bias_compare(item), _bias_alert(item)),
+        _row("RSI(相对强弱)", _rsi_summary(item), _rsi_compare(item), _rsi_alert(item)),
         _row("规则", _rule_score_summary(item), _rule_score_detail(item), _rule_score_alert(item)),
         _merged_row("动作", _action_merged_html(item)),
         _merged_row("AI", _ai_judgement_html(item)),
@@ -274,11 +274,11 @@ def _int_or_none(value: Any) -> int | None:
 def _nav_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     order = ["热", "温", "平", "凉", "寒"]
     meanings = {
-        "热": "偏加仓/建仓",
-        "温": "观察/等待",
-        "平": "持有/中性",
-        "凉": "减仓/降速",
-        "寒": "暂停/高风险",
+        "热": "动量≥80",
+        "温": "动量60-79",
+        "平": "动量40-59",
+        "凉": "动量20-39",
+        "寒": "动量<20",
     }
     grouped = {key: [] for key in order}
     for etf in etfs:
@@ -373,8 +373,8 @@ def _grid_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _risk_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    items = [item for item in etfs if item.get("nav_heat") in {"寒", "凉"} or (item.get("risk_score") or 0) >= 60]
-    items.sort(key=lambda item: (item.get("nav_heat") != "寒", -(item.get("risk_score") or 0), item.get("code")))
+    items = [item for item in etfs if (item.get("risk_score") or 0) >= 60]
+    items.sort(key=lambda item: (-(item.get("risk_score") or 0), item.get("code")))
     rows = []
     for item in items:
         score = item.get("risk_score")
@@ -396,6 +396,8 @@ def _title_meta(item: dict | None, grid: dict | None) -> str:
             [
                 f"持 {_num(item.get('quantity'), 0)}",
                 f"仓 {_pct(item.get('position_pct'))}",
+                f"成本 {_num(item.get('cost_price'), 3)}",
+                f"市值 {_num(item.get('market_value'), 2)}",
                 f"盈亏 {_color_number(item.get('pnl_pct'), suffix='%')}",
             ]
         )
@@ -582,6 +584,29 @@ def _bias_alert(item: dict) -> str:
     if bias12 is not None and bias6 < -3 and bias12 < -3:
         return _span("多周期负乖离，控制仓位试探", "attention")
     return _span("乖离温和", "neutral")
+
+
+def _rsi_summary(item: dict) -> str:
+    return f"14: {_num(item.get('rsi14'), 1)}"
+
+
+def _rsi_compare(item: dict) -> str:
+    return _cell_html("<30偏弱/超卖；30-70中性；>70偏强/过热")
+
+
+def _rsi_alert(item: dict) -> str:
+    rsi14 = _float_or_none(item.get("rsi14"))
+    if rsi14 is None:
+        return _cell_html("RSI数据不足")
+    if rsi14 >= 80:
+        return _span("短线明显过热，避免追高", "danger")
+    if rsi14 >= 70:
+        return _span("偏强但接近过热", "warn")
+    if rsi14 <= 20:
+        return _span("极弱区，先等止跌", "loss strong")
+    if rsi14 <= 30:
+        return _span("偏弱/超卖，反弹需确认", "attention")
+    return _span("强弱中性", "neutral")
 
 
 def _action_merged_html(item: dict) -> str:
@@ -899,8 +924,8 @@ def _pnl_text(item: dict | None) -> str:
         return "未持仓"
     number = _float_or_none(item.get("pnl_pct"))
     if number is None:
-        return "盈亏 -"
-    return f"盈亏 {number:+.2f}%"
+        return "-"
+    return f"{number:+.2f}%"
 
 
 def _signed_pct(value: Any) -> str:
@@ -937,22 +962,25 @@ def _grid_action_class(action: str) -> str:
 
 def _nav_signal(action: str, grid_action: str, item: dict | None) -> dict[str, str]:
     display_action = _compact_action(_display_action(action))
-    heat = "平"
-    heat_class = "heat-flat"
     action_class = _action_class(action)
-    text = f"{action} {grid_action}"
-    risk_score = _float_or_none((item or {}).get("rule_risk_score"))
-    filter_status = str((item or {}).get("rule_filter_status") or "")
-    if "禁止" in text or "暂停" in text or filter_status == "禁止交易" or (risk_score is not None and risk_score >= 80):
-        heat, heat_class = "寒", "heat-cold"
-    elif any(word in text for word in ("卖出", "减仓", "降低")) or (risk_score is not None and risk_score >= 65):
-        heat, heat_class = "凉", "heat-cool"
-    elif any(word in action for word in ("买入", "加仓", "建仓", "分批")):
-        heat, heat_class = "热", "heat-hot"
-    elif any(word in action for word in ("观察", "等待", "试探")):
-        heat, heat_class = "温", "heat-warm"
+    heat, heat_class = _momentum_heat((item or {}).get("rule_momentum_score"))
     meta = _nav_meta(item)
     return {"heat": heat, "heat_class": heat_class, "action": display_action, "action_class": action_class, "meta": meta}
+
+
+def _momentum_heat(value: Any) -> tuple[str, str]:
+    score = _float_or_none(value)
+    if score is None:
+        return "平", "heat-flat"
+    if score >= 80:
+        return "热", "heat-hot"
+    if score >= 60:
+        return "温", "heat-warm"
+    if score >= 40:
+        return "平", "heat-flat"
+    if score >= 20:
+        return "凉", "heat-cool"
+    return "寒", "heat-cold"
 
 
 def _compact_action(action: str) -> str:

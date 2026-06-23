@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     analyze.add_argument("--run-id", required=True, help="要分析的实时运行编号")
 
     report = sub.add_parser("report")
-    report.add_argument("--run-id", help="要生成报告的实时运行编号，默认使用最新一次分析")
+    report.add_argument("--run-id", help="调试/AI回写后复用的实时运行编号；不传则重新打开网页采集最新数据")
 
     ai_attach = sub.add_parser("ai-attach")
     ai_attach.add_argument("--run-id", required=True, help="要写入宿主 AI 综合研判的实时运行编号")
@@ -63,7 +63,14 @@ def main(argv: list[str] | None = None) -> int:
             run_analyze(root, args.run_id)
             return 0
         if args.cmd == "report":
-            run_report(root, args.run_id or latest_run_id(root))
+            if args.run_id:
+                run_report(root, args.run_id)
+            else:
+                run_id = run_id_str()
+                require_web_access_proxy()
+                run_collect(root, run_id)
+                run_analyze(root, run_id)
+                run_report(root, run_id)
             return 0
         if args.cmd == "ai-attach":
             run_ai_attach(root, args.run_id, Path(args.input))
@@ -252,14 +259,6 @@ def run_ai_attach(root: Path, run_id: str, input_path: Path) -> None:
     analysis["recommendations"] = attach_ai_judgements(recommendations, ai_judgements)
     write_json(analysis_path, analysis)
     print(f"已写入宿主 AI 综合研判: data/raw/market/{run_id}/{AI_JUDGEMENTS_FILE}")
-
-
-def latest_run_id(root: Path) -> str:
-    market_root = root / "data/raw/market"
-    candidates = sorted(path.name for path in market_root.iterdir() if (path / "analysis.json").exists()) if market_root.exists() else []
-    if not candidates:
-        raise RuntimeError("未找到任何实时分析结果，请先运行 etfmate run。")
-    return candidates[-1]
 
 
 def _require_items(payload: Any, key: str, message: str) -> None:
