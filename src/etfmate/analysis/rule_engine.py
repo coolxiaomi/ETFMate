@@ -24,7 +24,12 @@ def decide_position(
         "action": action,
         "category": category,
         "trend_score": trend["score"],
-        "trend_level": _trend_level(trend["score"]),
+        "trend_level": trend["name"],
+        "trend_code": trend["level"],
+        "trend_tags": trend["tags"],
+        "trend_scores": trend["scores"],
+        "trend_indicators": trend["indicators"],
+        "trend_data_sufficient": trend["data_sufficient"],
         "momentum_score": momentum["score"],
         "risk_score": risk["score"],
         "risk_level": _risk_level(risk["score"]),
@@ -96,24 +101,167 @@ def _trade_filters(market: MarketSnapshot, position: Position | None, category: 
 
 
 def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
-    score = 0
-    evidence: list[str] = []
-    if market.ma20 and market.last_price > market.ma20:
-        score += 20
-        evidence.append("现价高于MA20")
-    if market.ma20 and market.ma60 and market.ma20 > market.ma60:
-        score += 20
-        evidence.append("MA20高于MA60")
-    if market.ma60 and market.ma120 and market.ma60 > market.ma120:
-        score += 20
-        evidence.append("MA60高于MA120")
-    if market.ma20_slope_pct is not None and market.ma20_slope_pct > 0:
-        score += 20
-        evidence.append("MA20近5日斜率向上")
-    if market.ma120 and market.last_price > market.ma120:
-        score += 20
-        evidence.append("现价高于MA120")
-    return {"score": score, "evidence": evidence or ["趋势指标不足或未确认"]}
+    close = _num_or_none(market.last_price)
+    ma5 = _num_or_none(market.ma5)
+    ma10 = _num_or_none(market.ma10)
+    ma20 = _num_or_none(market.ma20)
+    ma5_slope_3 = _num_or_none(market.ma5_slope_3)
+    vol_ratio_1_5 = _num_or_none(market.vol_ratio_1_5)
+    vol_ratio_5_20 = _num_or_none(market.vol_ratio_5_20)
+    boll_position = _num_or_none(market.boll_position)
+    bias5 = _num_or_none(market.bias5_ratio)
+    rsi6 = _num_or_none(market.rsi6)
+    atr14 = _num_or_none(market.atr14)
+    atr_expansion_ratio = _num_or_none(market.atr_expansion_ratio)
+
+    core_values = [close, ma5, ma10, ma20, ma5_slope_3, boll_position, bias5, rsi6, atr14, atr_expansion_ratio]
+    data_sufficient = bool((market.kline_days or 0) >= 60 and all(value is not None for value in core_values))
+    tags: list[str] = []
+
+    ma_score = 0
+    if None not in (close, ma5, ma10, ma20, ma5_slope_3):
+        if close > ma5 and ma5 > ma10 and ma10 > ma20 and ma5_slope_3 > 0:
+            ma_score = 30
+        elif close > ma5 and ma5 > ma10 and ma5_slope_3 > 0:
+            ma_score = 25
+        elif close > ma5 and ma5_slope_3 > 0:
+            ma_score = 18
+        elif close > ma5:
+            ma_score = 12
+        elif close < ma5 and ma5 < ma10:
+            ma_score = 0
+        else:
+            ma_score = 5
+
+    vol_score = 0
+    if vol_ratio_1_5 is not None and vol_ratio_5_20 is not None:
+        if vol_ratio_1_5 >= 1.3 and vol_ratio_5_20 >= 1.0:
+            vol_score = 15
+        elif vol_ratio_1_5 >= 1.1:
+            vol_score = 12
+        elif vol_ratio_1_5 >= 0.9:
+            vol_score = 8
+        else:
+            vol_score = 4
+
+    boll_score = 0
+    if boll_position is not None:
+        boll_position = _clamp(boll_position, 0, 1)
+        if 0.60 <= boll_position <= 0.90:
+            boll_score = 20
+        elif 0.90 < boll_position <= 1.00:
+            boll_score = 15
+        elif 0.50 <= boll_position < 0.60:
+            boll_score = 12
+        elif 0.35 <= boll_position < 0.50:
+            boll_score = 6
+        else:
+            boll_score = 2
+
+    bias_score = 0
+    if bias5 is not None:
+        if 0 < bias5 <= 0.025:
+            bias_score = 10
+        elif 0.025 < bias5 <= 0.04:
+            bias_score = 8
+        elif 0.04 < bias5 <= 0.06:
+            bias_score = 5
+        elif bias5 > 0.06:
+            bias_score = 2
+        elif -0.02 <= bias5 <= 0:
+            bias_score = 5
+        else:
+            bias_score = 2
+
+    rsi_score = 0
+    if rsi6 is not None:
+        if 50 < rsi6 <= 75:
+            rsi_score = 15
+        elif 75 < rsi6 <= 85:
+            rsi_score = 10
+        elif rsi6 > 85:
+            rsi_score = 5
+        elif 40 <= rsi6 <= 50:
+            rsi_score = 8
+        else:
+            rsi_score = 2
+
+    atr_risk_deduct = 0
+    if atr_expansion_ratio is not None:
+        if atr_expansion_ratio >= 1.8:
+            atr_risk_deduct = 10
+        elif atr_expansion_ratio >= 1.5:
+            atr_risk_deduct = 7
+        elif atr_expansion_ratio >= 1.2:
+            atr_risk_deduct = 3
+
+    score = round(_clamp(ma_score + vol_score + boll_score + bias_score + rsi_score - atr_risk_deduct, 0, 100), 2)
+    level, name = _short_trend_level(score, atr_risk_deduct)
+
+    if rsi6 is not None and rsi6 > 85:
+        tags.append("RSI短线过热")
+    if bias5 is not None and bias5 > 0.06:
+        tags.append("BIAS严重偏离MA5")
+    if boll_position is not None and boll_position > 0.95:
+        tags.append("接近或突破布林上轨")
+    if atr_expansion_ratio is not None and atr_expansion_ratio >= 1.5:
+        tags.append("ATR波动放大")
+    if vol_ratio_1_5 is not None and bias5 is not None and vol_ratio_1_5 >= 1.5 and bias5 > 0.04:
+        tags.append("放量急涨")
+    if close is not None and ma5 is not None and close < ma5:
+        tags.append("跌破MA5")
+    if None not in (close, ma5, ma10, ma20) and close > ma5 and ma5 > ma10 and ma10 > ma20:
+        tags.append("短线均线多头")
+    if vol_ratio_1_5 is not None and vol_ratio_1_5 < 0.9:
+        tags.append("短线量能不足")
+    if boll_position is not None and boll_position < 0.35:
+        tags.append("布林弱势区")
+    if not data_sufficient:
+        tags.append("数据不足")
+
+    scores = {
+        "ma_score": ma_score,
+        "vol_score": vol_score,
+        "boll_score": boll_score,
+        "bias_score": bias_score,
+        "rsi_score": rsi_score,
+        "atr_risk_deduct": atr_risk_deduct,
+    }
+    indicators = {
+        "ma5_slope_3": ma5_slope_3,
+        "vol_ratio_1_5": vol_ratio_1_5,
+        "vol_ratio_5_20": vol_ratio_5_20,
+        "boll_position": boll_position,
+        "bias5": bias5,
+        "rsi6": rsi6,
+        "atr_expansion_ratio": atr_expansion_ratio,
+    }
+    evidence = [
+        f"短线趋势{name} {score:.0f}",
+        "分项 "
+        + "/".join(
+            [
+                f"MA{ma_score}",
+                f"VOL{vol_score}",
+                f"BOLL{boll_score}",
+                f"BIAS{bias_score}",
+                f"RSI{rsi_score}",
+                f"ATR-{atr_risk_deduct}",
+            ]
+        ),
+    ]
+    if tags:
+        evidence.append("标签 " + "、".join(tags[:4]))
+    return {
+        "score": score,
+        "level": level,
+        "name": name,
+        "data_sufficient": data_sufficient,
+        "scores": scores,
+        "indicators": indicators,
+        "tags": tags,
+        "evidence": evidence,
+    }
 
 
 def _momentum_score(market: MarketSnapshot, all_markets: list[MarketSnapshot]) -> dict[str, Any]:
@@ -252,14 +400,27 @@ def _liquidity_threshold(category: str) -> float:
     return 50_000_000
 
 
-def _trend_level(score: int) -> str:
-    if score >= 80:
-        return "强趋势"
+def _short_trend_level(score: float, atr_risk_deduct: int) -> tuple[str, str]:
+    if score >= 85 and atr_risk_deduct == 0:
+        return "STRONG_ATTACK", "强势进攻区"
+    if score >= 75:
+        return "UPTREND", "短线上升趋势"
     if score >= 60:
-        return "中等趋势"
-    if score >= 40:
-        return "震荡"
-    return "弱趋势"
+        return "WEAK_UPTREND", "震荡偏强"
+    if score >= 45:
+        return "SIDEWAYS", "震荡观察"
+    return "WEAK", "短线转弱"
+
+
+def _num_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def _risk_level(score: int) -> str:

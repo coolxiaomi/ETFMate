@@ -45,14 +45,14 @@ body {
 h1, h2, h3 { margin: 0; letter-spacing: 0; }
 h1 { font-size: 26px; line-height: 1.2; }
 h2 { font-size: 18px; margin-bottom: 10px; }
-h3 { font-size: 16px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+h3 { font-size: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .title-meta { font-size: 11px; font-weight: 500; }
 .summary { display: grid; grid-template-columns: repeat(3, 94px); gap: 8px; }
 .summary div { background: var(--panel); border: 1px solid var(--line); padding: 8px 10px; }
 .summary span { display: block; font-size: 22px; font-weight: 800; }
 .summary label { color: var(--muted); font-size: 12px; }
 .section { margin-top: 18px; }
-.etf-heading-name { font-weight: 900; }
+.etf-heading-name { font-weight: 900; display: inline-flex; align-items: center; gap: 5px; }
 .nav-dashboard {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -428,7 +428,7 @@ table {
             <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> {{ group.count }}</h3>
             <div class="mini-list">
               {% for etf in group.etfs %}
-              <a class="mini-chip" href="#{{ etf.id }}"><span class="heat heat-mini {{ etf.nav_heat_class }}">{{ etf.nav_heat }}</span><span class="mini-code {{ etf.pnl_class }}">{{ etf.code }}</span><span class="mini-name">{{ etf.name }}</span><span class="mini-pnl {{ etf.pnl_class }}">{{ etf.pnl_text }}</span></a>
+              <a class="mini-chip" href="#{{ etf.id }}"><span class="heat heat-mini {{ etf.nav_heat_class }}" title="{{ etf.nav_heat_tip }}" aria-label="{{ etf.nav_heat_tip }}">{{ etf.nav_heat }}</span><span class="mini-code {{ etf.pnl_class }}">{{ etf.code }}</span><span class="mini-name">{{ etf.name }}</span><span class="mini-pnl {{ etf.pnl_class }}">{{ etf.pnl_text }}</span></a>
               {% endfor %}
             </div>
           </section>
@@ -480,7 +480,7 @@ table {
           {% if nav_dashboard.risk_items %}
           <div class="risk-bars">
             {% for etf in nav_dashboard.risk_items %}
-            <a class="risk-bar" href="#{{ etf.id }}"><span class="heat {{ etf.nav_heat_class }}">{{ etf.nav_heat }}</span><span class="bar-name {{ etf.pnl_class }}">{{ etf.code }} {{ etf.name }}</span><span class="risk-track"><span class="risk-fill" style="width: {{ etf.risk_width }}%"></span></span><span>{{ etf.risk_text }}</span></a>
+            <a class="risk-bar" href="#{{ etf.id }}"><span class="heat {{ etf.nav_heat_class }}" title="{{ etf.nav_heat_tip }}" aria-label="{{ etf.nav_heat_tip }}">{{ etf.nav_heat }}</span><span class="bar-name {{ etf.pnl_class }}">{{ etf.code }} {{ etf.name }}</span><span class="risk-track"><span class="risk-fill" style="width: {{ etf.risk_width }}%"></span></span><span>{{ etf.risk_text }}</span></a>
             {% endfor %}
           </div>
           {% else %}
@@ -492,7 +492,7 @@ table {
         {% for etf in etfs %}
         <article class="etf-card" id="{{ etf.id }}">
           <div class="etf-title">
-            <h3><span class="etf-heading-name {{ etf.pnl_class }}">{{ etf.code }} {{ etf.name }}</span><span class="title-meta">{{ etf.title_meta | safe }}</span></h3>
+            <h3><span class="etf-heading-name {{ etf.pnl_class }}"><span class="heat heat-mini {{ etf.nav_heat_class }}" title="{{ etf.nav_heat_tip }}" aria-label="{{ etf.nav_heat_tip }}">{{ etf.nav_heat }}</span>{{ etf.code }} {{ etf.name }}</span><span class="title-meta">{{ etf.title_meta | safe }}</span></h3>
             <div class="badges">{{ etf.action_pill | safe }}{{ etf.grid_pill | safe }}</div>
           </div>
           <section class="table-block">

@@ -107,6 +107,7 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "nav_action_class": nav["action_class"],
         "nav_heat": nav["heat"],
         "nav_heat_class": nav["heat_class"],
+        "nav_heat_tip": nav["heat_tip"],
         "nav_meta": nav["meta"],
         "risk_score": _float_or_none(rec.get("rule_risk_score")) if rec else None,
         "grid_action_short": grid_short,
@@ -275,11 +276,11 @@ def _int_or_none(value: Any) -> int | None:
 def _nav_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     order = ["热", "温", "平", "凉", "寒"]
     meanings = {
-        "热": "动量≥80",
-        "温": "动量60-79",
-        "平": "动量40-59",
-        "凉": "动量20-39",
-        "寒": "动量<20",
+        "热": "短趋≥85",
+        "温": "短趋75-84",
+        "平": "短趋60-74",
+        "凉": "短趋45-59",
+        "寒": "短趋<45",
     }
     grouped = {key: [] for key in order}
     for etf in etfs:
@@ -588,15 +589,20 @@ def _bias_alert(item: dict) -> str:
 
 
 def _rsi_summary(item: dict) -> str:
-    return f"14: {_num(item.get('rsi14'), 1)}"
+    return "；".join([f"6: {_num(item.get('rsi6'), 1)}", f"14: {_num(item.get('rsi14'), 1)}"])
 
 
 def _rsi_compare(item: dict) -> str:
-    return _cell_html("<30偏弱/超卖；30-70中性；>70偏强/过热")
+    return _cell_html("RSI6用于短线趋势评分；<30偏弱/超卖；30-70中性；>70偏强/过热")
 
 
 def _rsi_alert(item: dict) -> str:
+    rsi6 = _float_or_none(item.get("rsi6"))
     rsi14 = _float_or_none(item.get("rsi14"))
+    if rsi6 is not None and rsi6 > 85:
+        return _span("RSI6短线过热，避免追高", "danger")
+    if rsi6 is not None and rsi6 < 40:
+        return _span("RSI6偏弱，等修复确认", "attention")
     if rsi14 is None:
         return _cell_html("RSI数据不足")
     if rsi14 >= 80:
@@ -644,13 +650,13 @@ def _macd_alert(item: dict) -> str:
 def _action_merged_html(item: dict) -> str:
     parts = [
         _action_text(item),
-        _inline_label("源", item.get("candidate_source")),
-        _inline_label("限", item.get("rule_filter_status")),
-        _inline_label("注", item.get("investor_note")),
-        _inline_label("仓", _position_text(item)),
-        _inline_label("计划", item.get("position_plan")),
-        _inline_label("入场", item.get("entry_plan")),
-        _inline_label("因", "；".join(_filtered_action_reasons(item))),
+        _inline_label("来源", item.get("candidate_source")),
+        _inline_label("交易过滤", item.get("rule_filter_status")),
+        _inline_label("持仓备注", item.get("investor_note")),
+        _inline_label("仓位", _position_text(item)),
+        _inline_label("执行计划", item.get("position_plan")),
+        _inline_label("入场计划", item.get("entry_plan")),
+        _inline_label("决策依据", "；".join(_filtered_action_reasons(item))),
     ]
     return _join_html(parts)
 
@@ -672,11 +678,11 @@ def _ai_judgement_html(item: dict) -> str:
     guardrails = "；".join(judgement.get("guardrails") or [])
     parts = [
         _span(str(judgement.get("ai_action") or "未启用"), cls),
-        _inline_label("信", f"{_num(judgement.get('confidence'), 0)}%"),
-        _inline_label("倾", judgement.get("final_bias")),
-        _inline_label("判", judgement.get("judgement")),
-        _inline_label("冲", conflicts),
-        _inline_label("栏", guardrails),
+        _inline_label("置信度", f"{_num(judgement.get('confidence'), 0)}%"),
+        _inline_label("最终倾向", judgement.get("final_bias")),
+        _inline_label("研判", judgement.get("judgement")),
+        _inline_label("冲突点", conflicts),
+        _inline_label("护栏", guardrails),
     ]
     return _join_html(parts)
 
@@ -687,8 +693,8 @@ def _overview_html(item: dict) -> str:
     cls = "danger" if any(word in risk_text for word in ("跌破", "浮亏", "风险", "低于")) else "neutral"
     return _join_html(
         [
-            _inline_label("观", item.get("watch_price")),
-            _inline_label("入场", item.get("entry_plan")),
+            _inline_label("观察价位", item.get("watch_price")),
+            _inline_label("入场计划", item.get("entry_plan")),
             f'<span class="{cls}">{escape(risk_text)}</span>',
         ]
     )
@@ -712,8 +718,8 @@ def _layered_evidence_html(item: dict) -> str:
     summary = _cell(context.get("summary"))
     return _join_html(
         [
-            _inline_label("信", f"{_num(context.get('confidence'), 0)}%"),
-            _inline_label("分", _num(context.get("total_score"), 0)),
+            _inline_label("证据置信度", f"{_num(context.get('confidence'), 0)}%"),
+            _inline_label("证据总分", _num(context.get("total_score"), 0)),
             " ".join(chips),
             escape(summary),
         ]
@@ -778,8 +784,8 @@ def _rule_score_summary(item: dict) -> str:
     return "；".join(
         [
             f"综合 {_num(item.get('rule_total_score'), 1)}",
-            f"趋势 {_num(item.get('rule_trend_score'), 0)}",
-            f"动量 {_num(item.get('rule_momentum_score'), 0)}",
+            f"短趋 {_num(item.get('rule_trend_score'), 0)}",
+            f"中期动量 {_num(item.get('rule_momentum_score'), 0)}",
             f"风险 {_num(item.get('rule_risk_score'), 0)}",
         ]
     )
@@ -789,12 +795,28 @@ def _rule_score_detail(item: dict) -> str:
     rule = item.get("rule_decision") or {}
     if not isinstance(rule, dict):
         return _cell_html("规则评分未生成")
+    scores = rule.get("trend_scores") or {}
+    tags = "、".join(rule.get("trend_tags") or [])
+    trend_parts = ""
+    if isinstance(scores, dict) and scores:
+        trend_parts = "短趋分项 " + "/".join(
+            [
+                f"MA{_num(scores.get('ma_score'), 0)}",
+                f"VOL{_num(scores.get('vol_score'), 0)}",
+                f"BOLL{_num(scores.get('boll_score'), 0)}",
+                f"BIAS{_num(scores.get('bias_score'), 0)}",
+                f"RSI{_num(scores.get('rsi_score'), 0)}",
+                f"ATR-{_num(scores.get('atr_risk_deduct'), 0)}",
+            ]
+        )
     return _cell_html(
         "；".join(
             part
             for part in [
                 f"类型 {rule.get('category') or '-'}",
-                f"趋势 {rule.get('trend_level') or '-'}",
+                f"短线趋势 {rule.get('trend_level') or '-'}",
+                trend_parts,
+                f"标签 {tags}" if tags else "",
                 f"风险 {rule.get('risk_level') or '-'}",
                 f"目标仓位 {_pct(rule.get('target_position_pct'))}",
             ]
@@ -995,22 +1017,49 @@ def _grid_action_class(action: str) -> str:
 def _nav_signal(action: str, grid_action: str, item: dict | None) -> dict[str, str]:
     display_action = _compact_action(_display_action(action))
     action_class = _action_class(action)
-    heat, heat_class = _momentum_heat((item or {}).get("rule_momentum_score"))
+    rule = (item or {}).get("rule_decision") or {}
+    trend_code = rule.get("trend_code") if isinstance(rule, dict) else None
+    heat, heat_class = _trend_heat((item or {}).get("rule_trend_score"), trend_code)
     meta = _nav_meta(item)
-    return {"heat": heat, "heat_class": heat_class, "action": display_action, "action_class": action_class, "meta": meta}
+    return {
+        "heat": heat,
+        "heat_class": heat_class,
+        "heat_tip": _trend_heat_tip(item, heat),
+        "action": display_action,
+        "action_class": action_class,
+        "meta": meta,
+    }
 
 
-def _momentum_heat(value: Any) -> tuple[str, str]:
+def _trend_heat_tip(item: dict | None, heat: str) -> str:
+    if not item:
+        return f"温度 {heat}；趋势评分 -；趋势等级 -"
+    rule = item.get("rule_decision") or {}
+    trend_level = rule.get("trend_level") if isinstance(rule, dict) else None
+    trend_score = item.get("rule_trend_score")
+    return f"温度 {heat}；趋势评分 {_num(trend_score, 0)}；趋势等级 {_cell(trend_level)}"
+
+
+def _trend_heat(value: Any, trend_code: Any = None) -> tuple[str, str]:
+    by_code = {
+        "STRONG_ATTACK": ("热", "heat-hot"),
+        "UPTREND": ("温", "heat-warm"),
+        "WEAK_UPTREND": ("平", "heat-flat"),
+        "SIDEWAYS": ("凉", "heat-cool"),
+        "WEAK": ("寒", "heat-cold"),
+    }
+    if trend_code in by_code:
+        return by_code[str(trend_code)]
     score = _float_or_none(value)
     if score is None:
         return "平", "heat-flat"
-    if score >= 80:
+    if score >= 85:
         return "热", "heat-hot"
-    if score >= 60:
+    if score >= 75:
         return "温", "heat-warm"
-    if score >= 40:
+    if score >= 60:
         return "平", "heat-flat"
-    if score >= 20:
+    if score >= 45:
         return "凉", "heat-cool"
     return "寒", "heat-cold"
 

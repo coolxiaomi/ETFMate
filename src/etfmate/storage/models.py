@@ -82,6 +82,7 @@ class MarketSnapshot:
     turnover_pct: float | None = None
     vol_ratio: float | None = None
     ma5: float | None = None
+    ma5_slope_3: float | None = None
     ma10: float | None = None
     ma20: float | None = None
     ma60: float | None = None
@@ -90,6 +91,7 @@ class MarketSnapshot:
     boll_upper: float | None = None
     boll_mid: float | None = None
     boll_lower: float | None = None
+    boll_position: float | None = None
     atr7: float | None = None
     atr7_pct: float | None = None
     atr14: float | None = None
@@ -99,13 +101,19 @@ class MarketSnapshot:
     atr60: float | None = None
     atr60_pct: float | None = None
     bias6: float | None = None
+    bias5_ratio: float | None = None
     bias12: float | None = None
     bias24: float | None = None
     vol_ma5: float | None = None
     vol_ma20: float | None = None
+    vol_ratio_1_5: float | None = None
+    vol_ratio_5_20: float | None = None
     amount_avg20: float | None = None
     amount_ratio20: float | None = None
+    rsi6: float | None = None
     rsi14: float | None = None
+    atr20_avg: float | None = None
+    atr_expansion_ratio: float | None = None
     macd_dif: float | None = None
     macd_dea: float | None = None
     macd_hist: float | None = None
