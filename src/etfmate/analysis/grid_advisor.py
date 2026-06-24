@@ -88,6 +88,7 @@ def advise_grid(
         risk_score = _num_or_zero(rule_decision.get("risk_score"))
         trend_score = _num_or_zero(rule_decision.get("trend_score"))
         position_risk_level = str(rule_decision.get("risk_level") or "")
+        target_ratio = _num_or_zero(rule_decision.get("target_position_ratio"))
         if rule_action in {"禁止交易"}:
             action = "降低买入侧"
             suggested_buy_qty = _round_qty(base_lot_qty * 0.5)
@@ -95,6 +96,13 @@ def advise_grid(
             suggested_buy_fall = grid.buy_fall_pct
             suggested_sell_rise = grid.sell_rise_pct
             reasons.append("操作建议触发禁止交易；Touker 数量不设为 0，网格买入侧仅给一手倍数的保守降速建议")
+        elif position_risk_level == "HIGH" and target_ratio <= 0 and position:
+            action = "只保留卖出" if trend_score >= 30 else "暂停买入侧"
+            suggested_buy_qty = None
+            suggested_sell_qty = base_lot_qty
+            suggested_buy_fall = grid.buy_fall_pct
+            suggested_sell_rise = grid.sell_rise_pct
+            reasons.append("风险等级 HIGH 且目标仓位为 0，网格买入不再按正常数量建议；需人工停用买触发或只保留卖出纪律")
         elif position_action in {"EXIT_SHORT_TERM", "RISK_REVIEW"} or rule_action in {"退出短线仓位", "风控复核"} or trend_score < 45:
             action = "降低买入侧"
             suggested_buy_qty = _round_qty(base_lot_qty * 0.5)

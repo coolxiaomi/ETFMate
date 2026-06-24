@@ -222,4 +222,4 @@ runtime/
 data/
 .env
 .pytest_cache/
-tests/
+.workbuddy/

@@ -7,6 +7,11 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+RULE_VERSION = "2026.06.23-v1"
+SCORE_RULE_VERSION = "score-2026.06"
+GRID_RULE_VERSION = "grid-2026.06"
+RISK_RULE_VERSION = "risk-2026.06"
+
 
 def render_html(
     date: str,
@@ -23,10 +28,21 @@ def render_html(
         grid_advices_count=len(grid_advices),
         portfolio_stats=_portfolio_stats(recommendations, grid_advices, data_completeness),
         nav_dashboard=_nav_dashboard(etfs),
+        rule_versions=_rule_versions(date),
         etfs=etfs,
         trade_review=_trade_review_view(trade_review),
         data_completeness=_data_completeness_view(data_completeness),
     )
+
+
+def _rule_versions(generated_at: str) -> dict[str, str]:
+    return {
+        "rule_version": RULE_VERSION,
+        "score_rule_version": SCORE_RULE_VERSION,
+        "grid_rule_version": GRID_RULE_VERSION,
+        "risk_rule_version": RISK_RULE_VERSION,
+        "generated_at": generated_at,
+    }
 
 
 def render_markdown(
@@ -697,7 +713,24 @@ def _ai_judgement_html(item: dict) -> str:
     if not isinstance(judgement, dict):
         return _cell_html("AI 综合研判未生成")
     enabled = bool(judgement.get("enabled"))
+    confidence = _float_or_none(judgement.get("confidence")) or 0
+    if not enabled or confidence <= 0:
+        return _join_html(
+            [
+                _span("AI复核未启用", "neutral"),
+                _inline_label("说明", "本次完全采用规则引擎和风控约束"),
+            ]
+        )
     cls = "attention" if enabled else "neutral"
+    if confidence < 60:
+        return _join_html(
+            [
+                _span(str(judgement.get("ai_action") or "低置信复核"), "neutral"),
+                _inline_label("置信度", f"{_num(confidence, 0)}%"),
+                _inline_label("说明", "低置信度，仅作备注，不改变规则动作"),
+                _inline_label("最终倾向", judgement.get("final_bias")),
+            ]
+        )
     conflicts = "；".join(judgement.get("conflicts") or [])
     guardrails = "；".join(judgement.get("guardrails") or [])
     parts = [
@@ -1177,7 +1210,7 @@ def _action_class(action: str) -> str:
 
 
 def _grid_action_class(action: str) -> str:
-    if "暂停" in action:
+    if "暂停" in action or "只保留卖出" in action or "人工复核" in action:
         return "action-pause"
     if any(word in action for word in ("调宽", "调窄", "调整", "降低")):
         return "warn"
@@ -1266,8 +1299,12 @@ def _compact_action(action: str) -> str:
 
 def _compact_grid_action(action: str) -> str:
     display = _display_action(action)
+    if "只保留卖出" in display:
+        return "只卖"
     if "暂停" in display:
-        return "降买"
+        return "暂停买"
+    if "人工复核" in display:
+        return "复核"
     if "停买" in display:
         return "降买"
     if "降低买" in display:

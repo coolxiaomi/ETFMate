@@ -12,6 +12,7 @@ ACTION_NAMES = {
     "HOLD": "持有",
     "ADD": "加仓",
     "HOLD_OR_ADD": "持有观察",
+    "HOLD_WAIT_ADD": "持有待加仓确认",
     "HOLD_OR_REDUCE": "持有或小幅减仓",
     "REDUCE": "减仓",
     "RISK_REVIEW": "风控复核",
@@ -367,13 +368,13 @@ def _position_decision_from_short_trend(
         )
 
     if not holding:
-        if score >= 85 and no_high_risk:
+        if score >= 85 and no_high_risk and not _portfolio_blocks_add(portfolio):
             action = "OPEN"
-            target_ratio = 0.30
+            target_ratio = _apply_portfolio_caps(0.08, current_ratio, portfolio, warnings)
             reasons.append("未持仓且短线趋势评分不低于85、无高风险标签，进入初始建仓区")
-        elif score >= 75 and no_high_risk:
+        elif score >= 75 and no_high_risk and not _portfolio_blocks_add(portfolio):
             action = "LIGHT_OPEN"
-            target_ratio = 0.20
+            target_ratio = _apply_portfolio_caps(0.04, current_ratio, portfolio, warnings)
             reasons.append("未持仓且短线趋势评分不低于75、无高风险标签，可轻仓建仓观察")
         else:
             action = "WATCH"
@@ -384,11 +385,15 @@ def _position_decision_from_short_trend(
     else:
         base_target = _base_target_position(score, no_high_risk)
         target_ratio = _downgrade_target_position(base_target) if high_risk else base_target
+        target_ratio = _apply_portfolio_caps(target_ratio, current_ratio, portfolio, warnings)
         gap = target_ratio - current_ratio
         serious_risk = _is_serious_short_risk(score, market)
         reasons.append(f"基础目标仓位 {base_target:.0%}，风险调整后目标仓位 {target_ratio:.0%}")
 
-        if serious_risk:
+        if risk_level == "HIGH" and target_ratio <= 0 and current_ratio > 0:
+            action = "REDUCE" if current_ratio >= 0.05 else "RISK_REVIEW"
+            reasons.append("风险等级 HIGH 且目标仓位为 0，不允许被微调阈值降级为普通持有")
+        elif serious_risk:
             action = "EXIT_SHORT_TERM" if (_num_or_none(market.atr_expansion_ratio) or 0) >= 1.5 else "RISK_REVIEW"
             reasons.append("短线评分低于45且价格跌破MA5、MA5低于MA10，触发风控复核")
         elif abs(gap) < 0.05:
@@ -403,7 +408,7 @@ def _position_decision_from_short_trend(
 
         if action == "ADD":
             if not _can_add_by_trend(market, trend):
-                action = "HOLD_OR_ADD"
+                action = "HOLD_WAIT_ADD"
                 adjust_ratio = 0.0
                 new_ratio = current_ratio
                 reasons = [reason for reason in reasons if "可按阶梯方式加仓" not in reason]
@@ -477,26 +482,47 @@ def _current_position_ratio(position: Position | None, portfolio: dict[str, Any]
 
 def _base_target_position(score: float, no_high_risk: bool) -> float:
     if score >= 85 and no_high_risk:
-        return 0.60
+        return 0.12
     if score >= 75 and no_high_risk:
-        return 0.40
+        return 0.08
     if score >= 60:
-        return 0.25
+        return 0.05
     if score >= 45:
-        return 0.10
+        return 0.02
     return 0.00
 
 
 def _downgrade_target_position(base_target: float) -> float:
-    if base_target >= 0.60:
-        return 0.40
-    if base_target >= 0.40:
-        return 0.25
-    if base_target >= 0.25:
-        return 0.10
-    if base_target >= 0.10:
+    if base_target >= 0.12:
+        return 0.08
+    if base_target >= 0.08:
+        return 0.05
+    if base_target >= 0.05:
+        return 0.02
+    if base_target >= 0.02:
         return 0.00
     return 0.00
+
+
+def _apply_portfolio_caps(target_ratio: float, current_ratio: float, portfolio: dict[str, Any], warnings: list[str]) -> float:
+    capped = min(target_ratio, 0.08)
+    if target_ratio > capped:
+        warnings.append("单只 ETF 目标仓位按 8% 上限压缩")
+    total_ratio = (_num_or_none(portfolio.get("total_position_pct")) or 0.0) / 100.0
+    category_ratio = (_num_or_none(portfolio.get("category_pct")) or 0.0) / 100.0
+    if total_ratio >= 0.70 and capped > current_ratio:
+        warnings.append("组合总仓位已达到 70% 上限，禁止新增加仓")
+        capped = current_ratio
+    if category_ratio >= 0.15 and capped > current_ratio:
+        warnings.append("同类 ETF 仓位已达到 15% 上限，禁止继续提高该方向仓位")
+        capped = current_ratio
+    return capped
+
+
+def _portfolio_blocks_add(portfolio: dict[str, Any]) -> bool:
+    total_ratio = (_num_or_none(portfolio.get("total_position_pct")) or 0.0) / 100.0
+    category_ratio = (_num_or_none(portfolio.get("category_pct")) or 0.0) / 100.0
+    return total_ratio >= 0.70 or category_ratio >= 0.15
 
 
 def _has_high_risk(trend: dict[str, Any]) -> bool:
@@ -564,7 +590,7 @@ def _apply_filter_constraints(
     blocked: set[str],
     warnings: list[str],
 ) -> tuple[str, float, float, float]:
-    buy_actions = {"OPEN", "LIGHT_OPEN", "ADD", "HOLD_OR_ADD"}
+    buy_actions = {"OPEN", "LIGHT_OPEN", "ADD", "HOLD_OR_ADD", "HOLD_WAIT_ADD"}
     if action in buy_actions and {"买入", "加仓", "提高网格买入侧"} & blocked:
         warnings.append("交易过滤限制新增买入，仓位动作降级为观察/持有")
         return ("HOLD" if holding else "WATCH"), current_ratio, current_ratio, 0.0
@@ -586,6 +612,8 @@ def _action_copy(action: str, high_risk: bool, score: float) -> list[str]:
         return ["短线趋势评分较高且目标仓位高于当前仓位，可按单次上限分步加仓"]
     if action == "HOLD_OR_ADD":
         return ["目标仓位高于当前仓位，但加仓确认条件不足，先持有观察"]
+    if action == "HOLD_WAIT_ADD":
+        return ["目标仓位高于当前仓位，但加仓确认条件不足，先持有并等待加仓确认"]
     if action == "REDUCE":
         return ["目标仓位低于当前仓位，建议降低部分仓位"]
     if action == "RISK_REVIEW":
@@ -597,14 +625,17 @@ def _action_copy(action: str, high_risk: bool, score: float) -> list[str]:
 
 def _portfolio_state(position: Position | None, positions: list[Position], category: str) -> dict[str, Any]:
     total_value = sum(item.market_value for item in positions if item.market_value > 0)
+    total_position_pct = sum((item.position_pct or 0) for item in positions if item.market_value > 0)
     position_pct = position.position_pct if position and position.position_pct is not None else 0
     if not position_pct and position and total_value:
         position_pct = position.market_value / total_value * 100
     category_value = sum(item.market_value for item in positions if classify_etf(item.name) == category)
+    category_position_pct = sum((item.position_pct or 0) for item in positions if classify_etf(item.name) == category)
     return {
         "category": category,
         "position_pct": position_pct or 0,
-        "category_pct": category_value / total_value * 100 if total_value else 0,
+        "total_position_pct": total_position_pct or 0,
+        "category_pct": category_position_pct or (category_value / total_value * total_position_pct if total_value else 0),
     }
 
 
