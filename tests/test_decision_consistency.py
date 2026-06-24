@@ -87,7 +87,7 @@ def test_portfolio_limit_blocks_new_position(monkeypatch):
     monkeypatch.setattr(rule_engine, "_momentum_score", lambda market, all_markets: {"score": 90, "evidence": []})
     monkeypatch.setattr(rule_engine, "_risk_score", lambda market: {"score": 0, "evidence": []})
     existing = [
-        Position("510500", "中证500ETF", 1000, 1, 1, 1000, 0, 0, position_pct=72, position_pct_source="ths_account_total_asset"),
+        Position("510500", "中证500ETF", 1000, 1, 1, 1000, 0, 0, position_pct=82, position_pct_source="ths_account_total_asset"),
     ]
 
     decision = rule_engine.decide_position(None, None, _market(), existing, [_market()])
@@ -144,10 +144,40 @@ def test_high_risk_zero_target_grid_must_not_keep_normal_buy_side():
             "trend_score": 25,
             "target_position_ratio": 0,
         },
+        layered_context={"confidence": 22, "total_score": -3},
     )
 
     assert advice["action"] in {"暂停买入侧", "只保留卖出", "人工复核"}
     assert advice["suggested_buy_quantity"] is None
+
+
+def test_grid_confirmation_pct_uses_base_price_buckets_and_stays_equal():
+    cases = [
+        (0.99, 0.20),
+        (1.50, 0.15),
+        (2.50, 0.10),
+        (4.00, 0.07),
+        (6.00, 0.05),
+        (8.50, 0.03),
+    ]
+    for base_price, expected in cases:
+        grid = GridConfig(
+            code="159999",
+            name="测试ETF",
+            enabled=True,
+            base_price=base_price,
+            order_quantity=200,
+            buy_fall_pct=4,
+            sell_rise_pct=4,
+        )
+        market = _market()
+        market.last_price = base_price
+        market.atr14_pct = 8.0
+
+        advice = advise_grid(grid, market, _position(position_pct=2))
+
+        assert advice["suggested_buy_rebound_pct"] == expected
+        assert advice["suggested_sell_pullback_pct"] == expected
 
 
 def test_existing_grid_keeps_reasonable_base_price():

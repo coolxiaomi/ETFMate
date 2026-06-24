@@ -170,14 +170,9 @@ def _grid_view(item: dict | None) -> dict[str, Any]:
         return {"empty": True, "message": reasons or "当前不适合建仓，本次暂不设网格。", "rows": []}
     rows = [
         _grid_row("基准", item.get("current_base_price"), item.get("suggested_base_price"), ""),
-        _grid_row("买触", item.get("current_buy_fall_pct"), item.get("suggested_buy_fall_pct"), "%"),
-        _grid_row("买反", item.get("current_buy_rebound_pct"), item.get("suggested_buy_rebound_pct"), "%"),
-        _grid_row("卖触", item.get("current_sell_rise_pct"), item.get("suggested_sell_rise_pct"), "%"),
-        _grid_row("卖回", item.get("current_sell_pullback_pct"), item.get("suggested_sell_pullback_pct"), "%"),
-        _grid_row("买量", item.get("current_buy_quantity") or item.get("current_quantity"), item.get("suggested_buy_quantity"), " 股"),
-        _grid_row("卖量", item.get("current_sell_quantity") or item.get("current_quantity"), item.get("suggested_sell_quantity"), " 股"),
-        _grid_row("底仓", item.get("current_min_base_quantity"), item.get("suggested_min_base_quantity"), " 股"),
-        _grid_row("最大", item.get("current_max_position_quantity"), item.get("suggested_max_position_quantity"), " 股"),
+        _grid_sell_row(item),
+        _grid_buy_row(item),
+        _grid_position_limit_row(item),
         _merged_row("动作", _grid_action_merged_html(item)),
     ]
     return {"empty": False, "message": "", "rows": rows}
@@ -674,15 +669,15 @@ def _rsi_alert(item: dict) -> str:
 def _macd_summary(item: dict) -> str:
     return "；".join(
         [
-            f"DIF: {_num(item.get('macd_dif'), 4)}",
-            f"DEA: {_num(item.get('macd_dea'), 4)}",
-            f"柱: {_num(item.get('macd_hist'), 4)}",
+            f"DIF(快线): {_num(item.get('macd_dif'), 4)}",
+            f"DEA(慢线): {_num(item.get('macd_dea'), 4)}",
+            f"柱(动能柱): {_num(item.get('macd_hist'), 4)}",
         ]
     )
 
 
 def _macd_compare(item: dict) -> str:
-    return _cell_html("DIF>DEA偏多；DIF<DEA偏空；柱线扩大代表动能增强")
+    return _cell_html("DIF(快线)>DEA(慢线)偏多；DIF<DEA偏空；柱(动能柱)扩大代表动能增强")
 
 
 def _macd_alert(item: dict) -> str:
@@ -710,7 +705,7 @@ def _action_merged_html(item: dict) -> str:
         _inline_label("持仓备注", item.get("investor_note")),
         _inline_label("仓位", _position_text(item)),
         _inline_label("目标", _position_decision_text(item)),
-        _inline_label("风险等级", item.get("position_risk_level")),
+        _inline_label("风险等级", _risk_level_text(item.get("position_risk_level"))),
         _inline_label("执行计划", item.get("position_plan")),
         _inline_label("入场计划", item.get("entry_plan")),
         _inline_label("决策依据", "；".join(_filtered_action_reasons(item))),
@@ -893,7 +888,7 @@ def _position_text(item: dict) -> str:
     pct = _pct(item.get("position_pct"))
     holding_pct = _pct(item.get("holding_pct")) if item.get("holding_pct") is not None else "-"
     value = _num(item.get("market_value"), 2)
-    source = _cell(item.get("position_pct_source"))
+    source = _position_pct_source_text(item.get("position_pct_source"))
     return f"资金仓 {pct}，持仓内 {holding_pct}，{tier}，市值 {value}，口径 {source}"
 
 
@@ -901,8 +896,8 @@ def _position_decision_text(item: dict) -> str:
     target = _pct(item.get("target_position_pct"))
     new_position = _pct(item.get("new_position_pct"))
     adjust = _signed_pct(item.get("adjust_pct")) if item.get("adjust_pct") is not None else "-"
-    action = _cell(item.get("position_action"))
-    return f"目标 {target}，本次后 {new_position}，调整 {adjust}，枚举 {action}"
+    action = _position_action_text(item.get("position_action"))
+    return f"目标 {target}，本次后 {new_position}，调整 {adjust}，动作 {action}"
 
 
 def _grid_row(label: str, current: Any, suggested: Any, suffix: str) -> dict[str, Any]:
@@ -911,8 +906,106 @@ def _grid_row(label: str, current: Any, suggested: Any, suffix: str) -> dict[str
         label,
         _cell_html(_format_with_suffix(current, suffix)),
         _span(_format_with_suffix(suggested, suffix), "warn" if changed else "neutral"),
-        _span("需调整", "warn") if changed else _span("维持", "neutral"),
+        _span("需调整", "warn") if changed else "",
     )
+
+
+def _grid_sell_row(item: dict) -> dict[str, Any]:
+    current_qty = item.get("current_sell_quantity") or item.get("current_quantity")
+    suggested_qty = item.get("suggested_sell_quantity")
+    changed = any(
+        _changed(left, right)
+        for left, right in (
+            (item.get("current_sell_rise_pct"), item.get("suggested_sell_rise_pct")),
+            (item.get("current_sell_pullback_pct"), item.get("suggested_sell_pullback_pct")),
+            (current_qty, suggested_qty),
+        )
+    )
+    return _row(
+        "卖",
+        _grid_sell_text(item.get("current_sell_rise_pct"), item.get("current_sell_pullback_pct"), current_qty),
+        _grid_sell_text(item.get("suggested_sell_rise_pct"), item.get("suggested_sell_pullback_pct"), suggested_qty),
+        _span("需调整", "warn") if changed else "",
+    )
+
+
+def _grid_buy_row(item: dict) -> dict[str, Any]:
+    current_qty = item.get("current_buy_quantity") or item.get("current_quantity")
+    suggested_qty = item.get("suggested_buy_quantity")
+    changed = any(
+        _changed(left, right)
+        for left, right in (
+            (item.get("current_buy_fall_pct"), item.get("suggested_buy_fall_pct")),
+            (item.get("current_buy_rebound_pct"), item.get("suggested_buy_rebound_pct")),
+            (current_qty, suggested_qty),
+        )
+    )
+    return _row(
+        "买",
+        _grid_buy_text(item.get("current_buy_fall_pct"), item.get("current_buy_rebound_pct"), current_qty),
+        _grid_buy_text(item.get("suggested_buy_fall_pct"), item.get("suggested_buy_rebound_pct"), suggested_qty),
+        _span("需调整", "warn") if changed else "",
+    )
+
+
+def _grid_position_limit_row(item: dict) -> dict[str, Any]:
+    changed = any(
+        _changed(left, right)
+        for left, right in (
+            (item.get("current_min_base_quantity"), item.get("suggested_min_base_quantity")),
+            (item.get("current_max_position_quantity"), item.get("suggested_max_position_quantity")),
+        )
+    )
+    return _row(
+        "仓位",
+        _grid_limit_text(item.get("current_min_base_quantity"), item.get("current_max_position_quantity")),
+        _grid_limit_text(item.get("suggested_min_base_quantity"), item.get("suggested_max_position_quantity")),
+        _span("需调整", "warn") if changed else "",
+    )
+
+
+def _grid_sell_text(rise: Any, pullback: Any, qty: Any) -> str:
+    return "".join(
+        [
+            "涨",
+            _grid_pct_html(rise, "profit", "+"),
+            "，回落",
+            _grid_pct_html(pullback, "loss", "-"),
+            "，",
+            _grid_qty_html(qty),
+        ]
+    )
+
+
+def _grid_buy_text(fall: Any, rebound: Any, qty: Any) -> str:
+    return "".join(
+        [
+            "跌",
+            _grid_pct_html(fall, "loss", "-"),
+            "，反弹",
+            _grid_pct_html(rebound, "profit", "+"),
+            "，",
+            _grid_qty_html(qty),
+        ]
+    )
+
+
+def _grid_limit_text(min_base: Any, max_position: Any) -> str:
+    return f"底仓{_grid_qty_html(min_base)}，最大{_grid_qty_html(max_position)}"
+
+
+def _grid_pct_html(value: Any, cls: str, sign: str) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "-"
+    return f'<span class="{cls}">{sign}{abs(number):.2f}%</span>'
+
+
+def _grid_qty_html(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "-"
+    return f'<span class="attention">{number:.0f}股</span>'
 
 
 def _rule_score_summary(item: dict) -> str:
@@ -952,8 +1045,8 @@ def _rule_score_detail(item: dict) -> str:
                 f"短线趋势 {rule.get('trend_level') or '-'}",
                 trend_parts,
                 f"标签 {tags}" if tags else "",
-                f"仓位动作 {rule.get('position_action') or '-'} / {rule.get('action_name') or rule.get('action') or '-'}",
-                f"风险等级 {rule.get('risk_level') or '-'}",
+                f"仓位动作 {_position_action_text(rule.get('position_action') or rule.get('action_name') or rule.get('action'))}",
+                f"风险等级 {_risk_level_text(rule.get('risk_level'))}",
                 f"当前/目标/本次后 {_pct(rule.get('current_position_pct'))}/{_pct(rule.get('target_position_pct'))}/{_pct(rule.get('new_position_pct'))}",
                 f"调整 {_signed_pct(rule.get('adjust_pct'))}",
             ]
@@ -1015,13 +1108,20 @@ def _grid_action_merged_html(item: dict) -> str:
         [
             _span(f"网格:{_display_action(str(item.get('action') or '-'))}", _grid_action_class(str(item.get("action") or ""))),
             _inline_label("用途", item.get("grid_purpose")),
-            _inline_label("策略", item.get("strategy_profile")),
-            _inline_label("胜率护栏", "；".join(item.get("strategy_guardrails") or [])),
+            _inline_label("胜率护栏", "；".join(_report_guardrails(item))),
             _inline_label("基准", item.get("base_price_status")),
             _inline_label("基准判断", item.get("base_price_reason")),
             _inline_label("依据", "；".join(item.get("reasons") or [])),
         ]
     )
+
+
+def _report_guardrails(item: dict) -> list[str]:
+    return [
+        str(guardrail)
+        for guardrail in (item.get("strategy_guardrails") or [])
+        if "条件单用于替代盯盘" not in str(guardrail)
+    ]
 
 
 def _changed(left: Any, right: Any) -> bool:
@@ -1057,7 +1157,45 @@ def _pill(text: str, cls: str) -> str:
 
 
 def _display_action(action: str) -> str:
-    return _simplify_direction_text(action)
+    return _simplify_direction_text(_enum_text(action))
+
+
+def _enum_text(value: Any) -> str:
+    text = str(value or "")
+    mapping = {
+        "NO_ACTION": "不操作",
+        "WATCH": "观察",
+        "OPEN": "建仓",
+        "LIGHT_OPEN": "轻仓建仓",
+        "HOLD": "持有",
+        "ADD": "加仓",
+        "HOLD_OR_ADD": "持有观察",
+        "HOLD_WAIT_ADD": "持有待加仓确认",
+        "HOLD_OR_REDUCE": "持有或小幅减仓",
+        "REDUCE": "减仓",
+        "RISK_REVIEW": "风控复核",
+        "EXIT_SHORT_TERM": "退出短线仓位",
+    }
+    return mapping.get(text, text)
+
+
+def _position_action_text(value: Any) -> str:
+    return _display_action(_cell(value))
+
+
+def _risk_level_text(value: Any) -> str:
+    mapping = {"HIGH": "高", "MEDIUM": "中", "LOW": "低"}
+    return mapping.get(str(value or ""), _cell(value))
+
+
+def _position_pct_source_text(value: Any) -> str:
+    mapping = {
+        "ths_account_total_asset": "同花顺账户总资产",
+        "ths_position_fund_pct": "同花顺资金仓",
+        "positions_market_value_fallback": "持仓市值估算",
+        "missing": "缺失",
+    }
+    return mapping.get(str(value or ""), _cell(value))
 
 
 def _preferred_name(current: Any, candidate: Any, code: str) -> str:
@@ -1144,8 +1282,14 @@ def _simplify_direction_text(value: Any) -> str:
         "卖出侧": "卖",
         "买入触发": "买触发",
         "卖出触发": "卖触发",
+        "买触发": "买条件",
+        "卖触发": "卖条件",
         "买入数量": "买数量",
         "卖出数量": "卖数量",
+        "风险等级 HIGH": "风险等级高",
+        "风险等级 MEDIUM": "风险等级中",
+        "风险等级 LOW": "风险等级低",
+        "风险等级高 且": "风险等级高且",
     }
     for old, new in replacements.items():
         text = text.replace(old, new)

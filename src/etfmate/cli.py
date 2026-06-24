@@ -304,34 +304,42 @@ def _position(raw: dict, account_summary: dict | None = None) -> Position:
     code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "zqdm", "证券代码", "代码")))
     quantity = _num(_pick(raw, "quantity", "amount", "holdAmount", "current_amount", "持仓数量", "持有数量", "股份余额", default=0))
     market_value = _num(_pick(raw, "market_value", "marketValue", "参考市值", "市值", "持仓市值", default=0))
-    holding_pct = _maybe_num(_pick(raw, "holding_pct", "hold_pct", "holdingPct", "position_pct", "仓位占比", "仓位", default=None))
     summary = account_summary if isinstance(account_summary, dict) else {}
     total_asset = _maybe_num(_pick(summary, "total_asset", "totalAsset", "总资产", default=None))
     total_market_value = _maybe_num(_pick(summary, "total_market_value", "totalMarketValue", "持仓市值", default=None))
-    raw_fund_pct = _maybe_num(
+    raw_account_position_pct = _maybe_num(
         _pick(
             raw,
             "fund_position_pct",
             "capital_position_pct",
             "account_position_pct",
             "asset_position_pct",
+            "position_pct",
+            "holding_pct",
+            "hold_pct",
+            "holdingPct",
             "资金仓位占比",
             "总资产占比",
+            "仓位占比",
+            "仓位",
             default=None,
         )
     )
-    if raw_fund_pct is not None:
-        position_pct = raw_fund_pct
-        position_pct_source = "ths_position_fund_pct"
-    elif total_asset and total_asset > 0 and market_value > 0:
+    if total_asset and total_asset > 0 and market_value > 0:
         position_pct = market_value / total_asset * 100
         position_pct_source = "ths_account_total_asset"
+    elif raw_account_position_pct is not None:
+        position_pct = raw_account_position_pct
+        position_pct_source = "ths_position_fund_pct"
     elif total_market_value and total_market_value > 0 and market_value > 0:
         position_pct = market_value / total_market_value * 100
         position_pct_source = "positions_market_value_fallback"
     else:
         position_pct = None
         position_pct_source = "missing"
+    holding_pct = None
+    if total_market_value and total_market_value > 0 and market_value > 0:
+        holding_pct = market_value / total_market_value * 100
     return Position(
         code=code,
         name=str(_pick(raw, "name", "证券名称", "名称", default=code)),

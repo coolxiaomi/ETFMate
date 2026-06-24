@@ -36,8 +36,8 @@ def advise_grid(
     atr_pct = market.atr14_pct or current_step or 5.0
     suggested_buy_fall = _round_pct(_clamp(atr_pct * 0.9, 2.0, 8.0))
     suggested_sell_rise = _round_pct(_clamp(atr_pct * 0.8, 2.0, 8.0))
-    suggested_buy_rebound = _round_pct(_clamp(atr_pct * 0.25, 0.3, 1.5))
-    suggested_sell_pullback = _round_pct(_clamp(atr_pct * 0.25, 0.3, 1.5))
+    suggested_buy_rebound: float | None = None
+    suggested_sell_pullback: float | None = None
     current_qty = _current_quantity(grid)
     base_lot_qty = _round_qty(current_qty or _initial_quantity(position))
     suggested_buy_qty: float | None = base_lot_qty
@@ -89,7 +89,7 @@ def advise_grid(
         suggested_buy_qty = _round_qty(base_lot_qty * 0.5)
         suggested_sell_qty = _round_qty(base_lot_qty * 1.5)
         suggested_sell_rise = _round_pct(_clamp((market.atr14_pct or suggested_sell_rise) * 0.6, 2.0, suggested_sell_rise))
-        suggested_sell_pullback = _round_pct(_clamp((market.atr14_pct or suggested_sell_pullback) * 0.2, 0.3, suggested_sell_pullback))
+        suggested_sell_pullback = _round_pct(_clamp((market.atr14_pct or suggested_sell_pullback) * 0.08, 0.15, suggested_sell_pullback or 0.6))
         reasons.append("价格接近 BOLL 上轨且短线正偏离，卖出侧应更积极")
     elif low_zone:
         suggested_buy_qty = base_lot_qty
@@ -148,7 +148,8 @@ def advise_grid(
             reasons.append("七层证据置信度不足，本次不做过细网格调参")
         if total_score <= -2 and action != "维持网格并风险提示":
             reasons.append("多层证据偏弱，买入侧按保守仓位执行")
-            suggested_buy_qty = _round_qty((suggested_buy_qty or base_lot_qty) * 0.5)
+            if suggested_buy_qty is not None:
+                suggested_buy_qty = _round_qty(suggested_buy_qty * 0.5)
         elif total_score >= 2 and action in {"降低买入侧", "维持网格并风险提示"}:
             reasons.append("多层证据未完全转弱，降低买入侧后仍保留卖出侧纪律并观察修复")
 
@@ -162,6 +163,9 @@ def advise_grid(
     if _should_win_rate_boost_sell(position, strong_positive, grid_purpose):
         suggested_sell_qty = max(suggested_sell_qty or base_lot_qty, _round_qty(base_lot_qty * 1.5))
         reasons.append("小盈利分批止盈护栏触发，卖出侧保持更积极，不等待趋势完全破坏")
+    confirmation_pct = _confirmation_pct(base_eval.get("suggested_base") or (grid.base_price if grid else None) or market.last_price)
+    suggested_buy_rebound = confirmation_pct
+    suggested_sell_pullback = confirmation_pct
     suggested_min_base = _suggest_min_base_quantity(grid, position)
     suggested_max_position = _suggest_max_position_quantity(grid, position, suggested_buy_qty, base_lot_qty)
     if not reasons:
@@ -391,6 +395,22 @@ def _avg(left: float | None, right: float | None) -> float | None:
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def _confirmation_pct(base_price: float | None) -> float | None:
+    if base_price is None:
+        return None
+    if base_price <= 1:
+        return 0.20
+    if base_price <= 2:
+        return 0.15
+    if base_price <= 3:
+        return 0.10
+    if base_price <= 5:
+        return 0.07
+    if base_price <= 8:
+        return 0.05
+    return 0.03
 
 
 def _round_pct(value: float | None) -> float | None:

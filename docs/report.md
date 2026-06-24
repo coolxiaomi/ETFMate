@@ -149,12 +149,12 @@
 
 ```yaml
 portfolio_risk_limits:
-  max_total_position: 0.70
+  max_total_position: 0.80
   max_single_etf_weight: 0.08
   max_theme_weight: 0.15
   max_high_risk_weight: 0.10
   max_same_index_family_weight: 0.12
-  min_cash_buffer: 0.30
+  min_cash_buffer: 0.20
 ```
 
 目标仓位必须经过组合约束二次压缩。

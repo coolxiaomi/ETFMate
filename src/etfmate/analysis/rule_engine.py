@@ -18,6 +18,8 @@ ACTION_NAMES = {
     "RISK_REVIEW": "风控复核",
     "EXIT_SHORT_TERM": "退出短线仓位",
 }
+MAX_TOTAL_POSITION_RATIO = 0.80
+MAX_CATEGORY_POSITION_RATIO = 0.15
 
 
 def decide_position(
@@ -517,10 +519,10 @@ def _apply_portfolio_caps(target_ratio: float, current_ratio: float, portfolio: 
         return capped
     total_ratio = (_num_or_none(portfolio.get("total_position_pct")) or 0.0) / 100.0
     category_ratio = (_num_or_none(portfolio.get("category_pct")) or 0.0) / 100.0
-    if total_ratio >= 0.70 and capped > current_ratio:
-        warnings.append("组合总仓位已达到 70% 上限，禁止新增加仓")
+    if total_ratio >= MAX_TOTAL_POSITION_RATIO and capped > current_ratio:
+        warnings.append("组合总仓位已达到 80% 上限，必须至少保留 20% 现金，禁止新增加仓")
         capped = current_ratio
-    if category_ratio >= 0.15 and capped > current_ratio:
+    if category_ratio >= MAX_CATEGORY_POSITION_RATIO and capped > current_ratio:
         warnings.append("同类 ETF 仓位已达到 15% 上限，禁止继续提高该方向仓位")
         capped = current_ratio
     return capped
@@ -531,7 +533,7 @@ def _portfolio_blocks_add(portfolio: dict[str, Any]) -> bool:
         return False
     total_ratio = (_num_or_none(portfolio.get("total_position_pct")) or 0.0) / 100.0
     category_ratio = (_num_or_none(portfolio.get("category_pct")) or 0.0) / 100.0
-    return total_ratio >= 0.70 or category_ratio >= 0.15
+    return total_ratio >= MAX_TOTAL_POSITION_RATIO or category_ratio >= MAX_CATEGORY_POSITION_RATIO
 
 
 def _has_high_risk(trend: dict[str, Any]) -> bool:
