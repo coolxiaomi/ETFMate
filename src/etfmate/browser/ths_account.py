@@ -81,6 +81,7 @@ def collect(root: Path, out_dir: Path) -> dict:
     for trade_snapshot in trade_snapshots.values():
         trade_records.extend(_records_from_snapshot(trade_snapshot))
     positions = _dedupe(_extract_records(records, _looks_like_position), "code", "证券代码", "symbol", "名称")
+    account_summary = _account_summary_from_snapshot(snapshot, positions)
     trades = _dedupe(
         _extract_records(trade_records, _looks_like_trade),
         "trade_id",
@@ -100,6 +101,7 @@ def collect(root: Path, out_dir: Path) -> dict:
     watchlist_source_url = str(watchlist_snapshot.get("url") or THS_WATCHLIST_URL)
     return {
         "positions": positions,
+        "account_summary": account_summary,
         "trades": trades,
         "closed_positions": closed_positions,
         "watchlist": watchlist,
@@ -388,7 +390,7 @@ def _position_records_from_text(text: str) -> list[dict]:
                 "daily_pnl_pct": window[4] if len(window) > 4 else 0,
                 "pnl": window[5] if len(window) > 5 else 0,
                 "pnl_pct": window[6] if len(window) > 6 else 0,
-                "position_pct": window[12] if len(window) > 12 else 0,
+                "holding_pct": window[12] if len(window) > 12 else 0,
                 "quantity": window[13] if len(window) > 13 else 0,
                 "holding_days": window[14] if len(window) > 14 else 0,
                 "last_price": window[latest_pct_idx + 1] if len(window) > latest_pct_idx + 1 else 0,
@@ -398,6 +400,88 @@ def _position_records_from_text(text: str) -> list[dict]:
             }
         )
     return records
+
+
+def _account_summary_from_snapshot(snapshot: dict[str, Any], positions: list[dict]) -> dict[str, Any]:
+    text = str(snapshot.get("text") or "")
+    storage_records: list[dict] = []
+    for value in (snapshot.get("localStorage") or {}).values():
+        storage_records.extend(_json_records(value))
+    for value in (snapshot.get("sessionStorage") or {}).values():
+        storage_records.extend(_json_records(value))
+    total_asset = _first_number_from_records(
+        storage_records,
+        "total_asset",
+        "totalAsset",
+        "totalAssets",
+        "asset",
+        "assets",
+        "总资产",
+        "资产总额",
+        "账户资产",
+    ) or _extract_labeled_number(text, ("总资产", "资产总额", "账户资产"))
+    cash = _first_number_from_records(
+        storage_records,
+        "cash",
+        "available",
+        "available_cash",
+        "availableCash",
+        "可用资金",
+        "可用余额",
+        "现金",
+    ) or _extract_labeled_number(text, ("可用资金", "可用余额", "现金"))
+    total_market_value = sum(_to_number(_pick_value(item, "market_value", "marketValue", "参考市值", "市值", "持仓市值", default=0)) for item in positions)
+    if not total_asset and cash and total_market_value:
+        total_asset = cash + total_market_value
+    source = "ths_account_summary" if total_asset else "positions_market_value_fallback"
+    return {
+        "total_asset": total_asset or None,
+        "cash": cash or None,
+        "total_market_value": total_market_value or None,
+        "position_pct_source": source,
+        "note": "资金仓位使用账户总资产计算；如总资产缺失则按持仓市值合计估算",
+    }
+
+
+def _first_number_from_records(records: list[dict], *keys: str) -> float | None:
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        value = _pick_value(record, *keys, default=None)
+        number = _to_number(value)
+        if number > 0:
+            return number
+    return None
+
+
+def _extract_labeled_number(text: str, labels: tuple[str, ...]) -> float | None:
+    flat = re.sub(r"\s+", " ", str(text or ""))
+    for label in labels:
+        pattern = re.compile(rf"{re.escape(label)}\s*[:：]?\s*([+-]?\d[\d,]*(?:\.\d+)?)")
+        match = pattern.search(flat)
+        if match:
+            number = _to_number(match.group(1))
+            if number > 0:
+                return number
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    for idx, line in enumerate(lines):
+        if line not in labels:
+            continue
+        for candidate in lines[idx + 1 : idx + 4]:
+            number = _to_number(candidate)
+            if number > 0:
+                return number
+    return None
+
+
+def _to_number(value: Any) -> float:
+    if value in (None, ""):
+        return 0.0
+    text = str(value).replace(",", "").replace("%", "").strip()
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
 
 
 def _is_empty_note(value: str) -> bool:

@@ -648,7 +648,7 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
         <div class="tabbar" role="tablist">
           <button class="tab-button is-active" type="button" data-tab="decision">决策</button>
           <button class="tab-button" type="button" data-tab="trend">趋势评分</button>
-          <button class="tab-button" type="button" data-tab="holding">持仓</button>
+          <button class="tab-button" type="button" data-tab="holding">资金仓</button>
           <button class="tab-button" type="button" data-tab="pnl">盈亏</button>
           <button class="tab-button" type="button" data-tab="grid">网格</button>
           <button class="tab-button" type="button" data-tab="risk">风险</button>
@@ -691,7 +691,7 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
             <div class="pie" style="--pie: {{ nav_dashboard.holding.gradient }}"><div class="pie-center">{{ nav_dashboard.holding.total_pct }}</div></div>
             <div class="legend">
               {% for seg in nav_dashboard.holding.segments %}
-              <a class="legend-row filter-item" data-tags="{{ seg.filter_tags }}" href="#{{ seg.id }}"><span class="swatch" style="background: {{ seg.color }}"></span><span class="{{ seg.pnl_class }}">{{ seg.code }}</span><span class="mini-name">{{ seg.name }}</span><span>{{ seg.holding_pct_text }}</span></a>
+              <a class="legend-row filter-item" data-tags="{{ seg.filter_tags }}" href="#{{ seg.id }}"><span class="swatch" style="background: {{ seg.color }}"></span><span class="{{ seg.pnl_class }}">{{ seg.code }}</span><span class="mini-name">{{ seg.name }}</span><span>{{ seg.position_pct_text }}</span></a>
               {% endfor %}
             </div>
           </div>
@@ -773,7 +773,7 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
       {% if trade_review.periods %}
       <div class="table-scroll">
         <table class="dense">
-          <thead><tr><th>周期</th><th>评分</th><th>笔数</th><th>买入</th><th>卖出</th><th>费</th><th>问题</th><th>计划</th></tr></thead>
+          <thead><tr><th>周期</th><th>评分</th><th>笔数</th><th>买入</th><th>卖出</th><th>手续费</th><th>均额</th><th>费率</th><th>估算网格收益</th><th>低效</th><th>买后更低</th><th>卖后更高</th><th>过度</th><th>问题</th><th>计划</th></tr></thead>
           <tbody>
             {% for row in trade_review.periods %}
             <tr>
@@ -783,6 +783,13 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
               <td>{{ row.buy_amount }}</td>
               <td>{{ row.sell_amount }}</td>
               <td>{{ row.fee }}</td>
+              <td>{{ row.avg_trade_amount }}</td>
+              <td>{{ row.fee_to_turnover_ratio }}</td>
+              <td>{{ row.estimated_grid_profit }}</td>
+              <td>{{ row.ineffective_trade_count }}</td>
+              <td>{{ row.buy_after_down_count }}</td>
+              <td>{{ row.sell_after_up_count }}</td>
+              <td>{{ row.overtrading_flag }}</td>
               <td>{{ row.problems }}</td>
               <td>{{ row.plan }}</td>
             </tr>

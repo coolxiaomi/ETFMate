@@ -21,7 +21,7 @@ def recommend(
     boll_pos = _boll_position(market)
     holding_weight = position.market_value if position else 0
     portfolio_value = sum(item.market_value for item in (all_positions or []) if item.market_value > 0)
-    position_weight_pct = position.position_pct if position and position.position_pct is not None else (holding_weight / portfolio_value * 100 if portfolio_value else 0)
+    position_weight_pct = position.position_pct if position and position.position_pct is not None else 0
     position_tier = _position_tier(position_weight_pct)
     rule_decision = decide_position(position, grid, market, all_positions or [], all_markets or [])
     action = str(rule_decision.get("action") or "观察")
@@ -62,6 +62,10 @@ def recommend(
 
     if market.data_quality != "ok":
         risks.append(f"行情数据完整性: {market.data_quality}")
+    if position and position.position_pct_source == "positions_market_value_fallback":
+        risks.append("资金仓位缺少账户总资产，当前按持仓市值合计估算；组合仓位上限需谨慎解读")
+    elif position and position.position_pct_source == "missing":
+        risks.append("缺少资金仓位口径，仓位约束只能降级为保守判断")
 
     layer_payload = normalize_context(layered_context)
     if layer_payload:
@@ -98,6 +102,9 @@ def recommend(
         "quantity": position.quantity if position else None,
         "market_value": position.market_value if position else None,
         "position_pct": position.position_pct if position else None,
+        "holding_pct": position.holding_pct if position else None,
+        "position_pct_source": position.position_pct_source if position else None,
+        "account_total_asset": position.account_total_asset if position else None,
         "position_tier": position_tier,
         "investor_note": position.note if position else None,
         "cost_price": position.cost_price if position else None,

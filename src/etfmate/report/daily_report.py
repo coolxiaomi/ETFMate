@@ -109,7 +109,7 @@ def _etf_view(item: dict) -> dict[str, Any]:
     pnl_class = _pnl_class(rec)
     grid_short = _compact_grid_action(grid_action)
     is_held = bool(rec and (_float_or_none(rec.get("quantity")) or 0) > 0)
-    is_grid = bool(grid)
+    is_grid = bool(grid and grid.get("grid_applicable") is not False)
     is_pool = _is_clean_watchlist_item(rec)
     trend_score = _float_or_none(rec.get("rule_trend_score")) if rec else None
     return {
@@ -122,8 +122,8 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "filter_tags": _filter_tags(is_held, is_grid, is_pool),
         "pnl_class": pnl_class,
         "pnl_text": _pnl_text(rec),
-        "holding_pct_value": _float_or_none(rec.get("position_pct")) if rec else None,
-        "holding_pct_text": _pct(rec.get("position_pct")) if rec and rec.get("position_pct") is not None else "-",
+        "position_pct_value": _float_or_none(rec.get("position_pct")) if rec else None,
+        "position_pct_text": _pct(rec.get("position_pct")) if rec and rec.get("position_pct") is not None else "-",
         "trend_score": trend_score,
         "trend_score_text": "-" if trend_score is None else f"{trend_score:.0f}",
         "trend_width": f"{max(4, min(100, trend_score or 0)):.1f}",
@@ -165,11 +165,19 @@ def _holding_view(item: dict | None, grid: dict | None = None) -> dict[str, Any]
 def _grid_view(item: dict | None) -> dict[str, Any]:
     if not item:
         return {"empty": True, "message": "无 Touker 网格配置。", "rows": []}
+    if item.get("grid_applicable") is False:
+        reasons = "；".join(item.get("reasons") or [])
+        return {"empty": True, "message": reasons or "当前不适合建仓，本次暂不设网格。", "rows": []}
     rows = [
+        _grid_row("基准", item.get("current_base_price"), item.get("suggested_base_price"), ""),
         _grid_row("买触", item.get("current_buy_fall_pct"), item.get("suggested_buy_fall_pct"), "%"),
+        _grid_row("买反", item.get("current_buy_rebound_pct"), item.get("suggested_buy_rebound_pct"), "%"),
         _grid_row("卖触", item.get("current_sell_rise_pct"), item.get("suggested_sell_rise_pct"), "%"),
-        _grid_row("买量", item.get("current_quantity"), item.get("suggested_buy_quantity"), " 股"),
-        _grid_row("卖量", item.get("current_quantity"), item.get("suggested_sell_quantity"), " 股"),
+        _grid_row("卖回", item.get("current_sell_pullback_pct"), item.get("suggested_sell_pullback_pct"), "%"),
+        _grid_row("买量", item.get("current_buy_quantity") or item.get("current_quantity"), item.get("suggested_buy_quantity"), " 股"),
+        _grid_row("卖量", item.get("current_sell_quantity") or item.get("current_quantity"), item.get("suggested_sell_quantity"), " 股"),
+        _grid_row("底仓", item.get("current_min_base_quantity"), item.get("suggested_min_base_quantity"), " 股"),
+        _grid_row("最大", item.get("current_max_position_quantity"), item.get("suggested_max_position_quantity"), " 股"),
         _merged_row("动作", _grid_action_merged_html(item)),
     ]
     return {"empty": False, "message": "", "rows": rows}
@@ -215,6 +223,13 @@ def _trade_review_view(trade_review: dict) -> dict[str, Any]:
                 "buy_amount": _num(item.get("buy_amount"), 2),
                 "sell_amount": _num(item.get("sell_amount"), 2),
                 "fee": _num(item.get("fee"), 2),
+                "avg_trade_amount": _num(item.get("avg_trade_amount"), 2),
+                "fee_to_turnover_ratio": _pct((_float_or_none(item.get("fee_to_turnover_ratio")) or 0) * 100),
+                "estimated_grid_profit": "-" if item.get("estimated_grid_profit") is None else _num(item.get("estimated_grid_profit"), 2),
+                "ineffective_trade_count": _cell(item.get("ineffective_trade_count")),
+                "buy_after_down_count": _cell(item.get("buy_after_down_count")),
+                "sell_after_up_count": _cell(item.get("sell_after_up_count")),
+                "overtrading_flag": "是" if item.get("overtrading_flag") else "否",
                 "problems": "；".join(item.get("problems") or []),
                 "plan": _cell(item.get("plan")),
             }
@@ -257,7 +272,7 @@ def _portfolio_stats(recommendations: list[dict], grid_advices: list[dict], data
     held_count = _int_or_none(stats.get("positions_count"))
     if held_count is None:
         held_count = _data_count(data_completeness, "同花顺持仓")
-    grid_count = len(grid_advices)
+    grid_count = sum(1 for item in grid_advices if item.get("grid_applicable") is not False)
     if held_count is None:
         held_count = sum(1 for item in recommendations if (_float_or_none(item.get("quantity")) or 0) > 0)
     all_count = len({str(item.get("code") or "") for item in recommendations if item.get("code")})
@@ -356,22 +371,22 @@ def _action_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _holding_pie(etfs: list[dict[str, Any]]) -> dict[str, Any]:
-    held = [item for item in etfs if (item.get("holding_pct_value") or 0) > 0]
-    held.sort(key=lambda item: item.get("holding_pct_value") or 0, reverse=True)
-    total = sum(item.get("holding_pct_value") or 0 for item in held)
-    top3 = sum(item.get("holding_pct_value") or 0 for item in held[:3])
+    held = [item for item in etfs if (item.get("position_pct_value") or 0) > 0]
+    held.sort(key=lambda item: item.get("position_pct_value") or 0, reverse=True)
+    total = sum(item.get("position_pct_value") or 0 for item in held)
+    top3 = sum(item.get("position_pct_value") or 0 for item in held[:3])
     max_item = held[0] if held else None
     metrics = [
         {"label": "持", "value": f"{len(held)}只"},
-        {"label": "仓", "value": f"{total:.2f}%"},
+        {"label": "资金仓", "value": f"{total:.2f}%"},
         {"label": "Top3", "value": f"{top3:.2f}%"},
-        {"label": "最大", "value": f"{max_item['code']} {_pct(max_item.get('holding_pct_value'))}" if max_item else "-"},
+        {"label": "最大", "value": f"{max_item['code']} {_pct(max_item.get('position_pct_value'))}" if max_item else "-"},
     ]
     colors = ["#d8001b", "#107d32", "#006bff", "#aa4d00", "#4d4d4d", "#00ac96", "#f22782", "#0059ec", "#279141", "#8500d1"]
     segments = []
     cursor = 0.0
     for idx, item in enumerate(held):
-        pct = item.get("holding_pct_value") or 0
+        pct = item.get("position_pct_value") or 0
         share = 0 if total <= 0 else pct / total * 100
         start = cursor
         end = cursor + share
@@ -435,7 +450,8 @@ def _title_meta(item: dict | None, grid: dict | None) -> str:
         parts.extend(
             [
                 f"持 {_num(item.get('quantity'), 0)}",
-                f"仓 {_pct(item.get('position_pct'))}",
+                f"资金仓 {_pct(item.get('position_pct'))}",
+                f"持仓内 {_pct(item.get('holding_pct'))}" if item.get("holding_pct") is not None else "",
                 f"成本 {_num(item.get('cost_price'), 3)}",
                 f"市值 {_num(item.get('market_value'), 2)}",
                 f"盈亏 {_color_number(item.get('pnl_pct'), suffix='%')}",
@@ -443,7 +459,7 @@ def _title_meta(item: dict | None, grid: dict | None) -> str:
         )
     else:
         parts.extend(["未持仓", f"目标仓位 {_pct(item.get('target_position_pct'))}"])
-    parts.append("网格开" if grid else "无网格")
+    parts.append("网格开" if grid and grid.get("grid_applicable") is not False else "无网格")
     return " · " + "；".join(_simplify_direction_text(part) for part in parts if part)
 
 
@@ -460,7 +476,8 @@ def _holding_summary(item: dict) -> str:
         [
             f"量 {_num(item.get('quantity'), 0)}",
             f"值 {_num(item.get('market_value'), 2)}",
-            f"仓 {_pct(item.get('position_pct'))}",
+            f"资金仓 {_pct(item.get('position_pct'))}",
+            f"持仓内 {_pct(item.get('holding_pct'))}" if item.get("holding_pct") is not None else "",
         ]
     )
 
@@ -874,8 +891,10 @@ def _position_text(item: dict) -> str:
         return f"未持仓，{tier}，目标仓位 {target}"
     tier = _cell(item.get("position_tier"))
     pct = _pct(item.get("position_pct"))
+    holding_pct = _pct(item.get("holding_pct")) if item.get("holding_pct") is not None else "-"
     value = _num(item.get("market_value"), 2)
-    return f"{pct}，{tier}，市值 {value}"
+    source = _cell(item.get("position_pct_source"))
+    return f"资金仓 {pct}，持仓内 {holding_pct}，{tier}，市值 {value}，口径 {source}"
 
 
 def _position_decision_text(item: dict) -> str:
@@ -995,6 +1014,11 @@ def _grid_action_merged_html(item: dict) -> str:
     return _join_html(
         [
             _span(f"网格:{_display_action(str(item.get('action') or '-'))}", _grid_action_class(str(item.get("action") or ""))),
+            _inline_label("用途", item.get("grid_purpose")),
+            _inline_label("策略", item.get("strategy_profile")),
+            _inline_label("胜率护栏", "；".join(item.get("strategy_guardrails") or [])),
+            _inline_label("基准", item.get("base_price_status")),
+            _inline_label("基准判断", item.get("base_price_reason")),
             _inline_label("依据", "；".join(item.get("reasons") or [])),
         ]
     )
@@ -1009,7 +1033,7 @@ def _changed(left: Any, right: Any) -> bool:
 
 
 def _format_with_suffix(value: Any, suffix: str) -> str:
-    digits = 2 if suffix.strip() == "%" else 0
+    digits = 2 if suffix.strip() == "%" else 4 if not suffix.strip() else 0
     number = _num(value, digits)
     return "-" if number == "-" else f"{number}{suffix}"
 
@@ -1212,6 +1236,10 @@ def _action_class(action: str) -> str:
 def _grid_action_class(action: str) -> str:
     if "暂停" in action or "只保留卖出" in action or "人工复核" in action:
         return "action-pause"
+    if "暂不设" in action:
+        return "attention"
+    if "新建" in action:
+        return "action-buy"
     if any(word in action for word in ("调宽", "调窄", "调整", "降低")):
         return "warn"
     return "neutral"
@@ -1299,6 +1327,10 @@ def _compact_action(action: str) -> str:
 
 def _compact_grid_action(action: str) -> str:
     display = _display_action(action)
+    if "暂不设" in display:
+        return "暂不设"
+    if "新建" in display:
+        return "新建"
     if "只保留卖出" in display:
         return "只卖"
     if "暂停" in display:

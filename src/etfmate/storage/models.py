@@ -15,6 +15,9 @@ class Position:
     pnl: float
     pnl_pct: float
     position_pct: float | None = None
+    holding_pct: float | None = None
+    position_pct_source: str = "unknown"
+    account_total_asset: float | None = None
     note: str | None = None
     source: str = "ths"
 

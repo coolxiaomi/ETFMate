@@ -101,7 +101,8 @@ def run_collect(root: Path, run_id: str) -> None:
 def run_analyze(root: Path, run_id: str) -> None:
     account = read_json(root / "data/raw/ths" / run_id / "account.json", default={})
     grid_payload = read_json(root / "data/raw/touker" / run_id / "grids.json", default={})
-    positions = [_position(item) for item in _items(account, "positions")]
+    account_summary = account.get("account_summary") if isinstance(account, dict) else {}
+    positions = [_position(item, account_summary) for item in _items(account, "positions")]
     current_positions = [item for item in positions if (item.quantity or 0) > 0]
     trades = [_trade(item) for item in _items(account, "trades")]
     grids = [_grid(item) for item in _items(grid_payload, "grids")]
@@ -139,14 +140,13 @@ def run_analyze(root: Path, run_id: str) -> None:
     rule_decisions = {str(item.get("code")): item.get("rule_decision") for item in recommendations}
     grid_advices = [
         advise_grid(
+            grids_by_code.get(item.code),
             item,
-            snapshots_by_code[item.code],
             positions_by_code.get(item.code),
             layered_context=layered_contexts.get(item.code),
             rule_decision=rule_decisions.get(item.code),
         )
-        for item in grids
-        if item.code in universe_codes and item.code in snapshots_by_code
+        for item in snapshots
     ]
     ai_review_input = build_ai_review_input(recommendations, grid_advices)
     write_json(root / "data/raw/market" / run_id / AI_REVIEW_INPUT_FILE, ai_review_input)
@@ -191,7 +191,8 @@ def run_report(root: Path, run_id: str) -> None:
     if analysis.get("trade_reviews"):
         review = {**review, "periods": analysis["trade_reviews"]}
 
-    positions_count = sum(1 for item in (_position(raw) for raw in _items(account, "positions")) if (item.quantity or 0) > 0)
+    account_summary = account.get("account_summary") if isinstance(account, dict) else {}
+    positions_count = sum(1 for item in (_position(raw, account_summary) for raw in _items(account, "positions")) if (item.quantity or 0) > 0)
     trades_count = len(_items(account, "trades"))
     closed_count = len(_items(account, "closed_positions"))
     watchlist, watchlist_filtered = _watchlist_from_account(account)
@@ -219,6 +220,12 @@ def run_report(root: Path, run_id: str) -> None:
                 "count": f"{trades_count} 笔",
                 "source": "同花顺投资账本交易记录 tab",
                 "note": "覆盖本月、近三月、近半年、今年、自定义并滚动采集" if trades_count else "无数据",
+            },
+            {
+                "label": "同花顺账户资产",
+                "count": _account_summary_count(account_summary),
+                "source": "同花顺投资账本持仓页",
+                "note": _account_summary_note(account_summary),
             },
             {
                 "label": "同花顺自选ETF池",
@@ -293,19 +300,51 @@ def _items(payload: Any, key: str) -> list:
     return []
 
 
-def _position(raw: dict) -> Position:
+def _position(raw: dict, account_summary: dict | None = None) -> Position:
     code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "zqdm", "证券代码", "代码")))
     quantity = _num(_pick(raw, "quantity", "amount", "holdAmount", "current_amount", "持仓数量", "持有数量", "股份余额", default=0))
+    market_value = _num(_pick(raw, "market_value", "marketValue", "参考市值", "市值", "持仓市值", default=0))
+    holding_pct = _maybe_num(_pick(raw, "holding_pct", "hold_pct", "holdingPct", "position_pct", "仓位占比", "仓位", default=None))
+    summary = account_summary if isinstance(account_summary, dict) else {}
+    total_asset = _maybe_num(_pick(summary, "total_asset", "totalAsset", "总资产", default=None))
+    total_market_value = _maybe_num(_pick(summary, "total_market_value", "totalMarketValue", "持仓市值", default=None))
+    raw_fund_pct = _maybe_num(
+        _pick(
+            raw,
+            "fund_position_pct",
+            "capital_position_pct",
+            "account_position_pct",
+            "asset_position_pct",
+            "资金仓位占比",
+            "总资产占比",
+            default=None,
+        )
+    )
+    if raw_fund_pct is not None:
+        position_pct = raw_fund_pct
+        position_pct_source = "ths_position_fund_pct"
+    elif total_asset and total_asset > 0 and market_value > 0:
+        position_pct = market_value / total_asset * 100
+        position_pct_source = "ths_account_total_asset"
+    elif total_market_value and total_market_value > 0 and market_value > 0:
+        position_pct = market_value / total_market_value * 100
+        position_pct_source = "positions_market_value_fallback"
+    else:
+        position_pct = None
+        position_pct_source = "missing"
     return Position(
         code=code,
         name=str(_pick(raw, "name", "证券名称", "名称", default=code)),
         quantity=quantity,
         cost_price=_num(_pick(raw, "cost_price", "costPrice", "成本价", "成本", "持仓成本", default=0)),
         last_price=_num(_pick(raw, "last_price", "lastPrice", "currentPrice", "现价", "最新价", default=0)),
-        market_value=_num(_pick(raw, "market_value", "marketValue", "参考市值", "市值", "持仓市值", default=0)),
+        market_value=market_value,
         pnl=_num(_pick(raw, "pnl", "profit", "floatProfit", "盈亏", "浮动盈亏", "持仓盈亏", default=0)),
         pnl_pct=_num(_pick(raw, "pnl_pct", "profitRate", "incomeRate", "盈亏率", "收益率", "持仓收益率", default=0)),
-        position_pct=_num(_pick(raw, "position_pct", "仓位占比", "仓位", default=0)),
+        position_pct=position_pct,
+        holding_pct=holding_pct,
+        position_pct_source=position_pct_source,
+        account_total_asset=total_asset,
         note=_text(_pick(raw, "note", "remark", "remarks", "comment", "备注", "持仓备注", "看法", default="")),
     )
 
@@ -448,6 +487,37 @@ def _avg_number(values: Any) -> float | None:
 
 def _fmt_pct(value: float | None) -> str:
     return "-" if value is None else f"{value:.0f}%"
+
+
+def _account_summary_count(summary: dict | None) -> str:
+    if not isinstance(summary, dict):
+        return "未采集"
+    total_asset = _maybe_num(_pick(summary, "total_asset", "totalAsset", "总资产", default=None))
+    cash = _maybe_num(_pick(summary, "cash", "available_cash", "availableCash", "可用资金", default=None))
+    market_value = _maybe_num(_pick(summary, "total_market_value", "totalMarketValue", "持仓市值", default=None))
+    parts = []
+    if total_asset is not None:
+        parts.append(f"总资产 {_fmt_money(total_asset)}")
+    if cash is not None:
+        parts.append(f"现金 {_fmt_money(cash)}")
+    if market_value is not None:
+        parts.append(f"持仓市值 {_fmt_money(market_value)}")
+    return "；".join(parts) if parts else "未采集到账户总资产"
+
+
+def _account_summary_note(summary: dict | None) -> str:
+    if not isinstance(summary, dict):
+        return "缺少账户资产摘要，资金仓位口径会降级"
+    source = str(summary.get("position_pct_source") or "")
+    if source == "ths_account_summary" and summary.get("total_asset"):
+        return "资金仓位使用单只市值 / 账户总资产计算"
+    return "未拿到账户总资产时，仅能按持仓市值合计 fallback，组合仓位上限置信度下降"
+
+
+def _fmt_money(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:,.2f}"
 
 
 def _layer_source_summary(layered_contexts: dict) -> str:

@@ -339,7 +339,7 @@ def _position_decision_from_short_trend(
 ) -> dict[str, Any]:
     score = _num_or_none(trend.get("score")) or 0.0
     current_ratio = _current_position_ratio(position, portfolio)
-    holding = current_ratio > 0
+    holding = bool(position and position.quantity > 0 and position.market_value > 0)
     no_high_risk = _no_high_risk(trend)
     high_risk = _has_high_risk(trend)
     risk_level = _position_risk_level(score, trend)
@@ -351,6 +351,8 @@ def _position_decision_from_short_trend(
         f"趋势评分 {score:.0f}，当前仓位 {current_ratio:.2%}",
     ]
     warnings = list(filters["reasons"])
+    if portfolio.get("position_pct_confidence") == "low":
+        warnings.append("资金仓位缺少账户总资产口径，持仓内部占比仅作集中度参考；新增买入默认降级")
     blocked = set(filters["blocked_actions"])
     if filters["status"] == "禁止交易":
         return _build_position_decision(
@@ -508,6 +510,11 @@ def _apply_portfolio_caps(target_ratio: float, current_ratio: float, portfolio: 
     capped = min(target_ratio, 0.08)
     if target_ratio > capped:
         warnings.append("单只 ETF 目标仓位按 8% 上限压缩")
+    if portfolio.get("position_pct_confidence") == "low":
+        if capped > current_ratio:
+            warnings.append("资金仓位口径置信度低，新增买入目标先按 4% 以内试探")
+            capped = max(current_ratio, min(capped, 0.04))
+        return capped
     total_ratio = (_num_or_none(portfolio.get("total_position_pct")) or 0.0) / 100.0
     category_ratio = (_num_or_none(portfolio.get("category_pct")) or 0.0) / 100.0
     if total_ratio >= 0.70 and capped > current_ratio:
@@ -520,6 +527,8 @@ def _apply_portfolio_caps(target_ratio: float, current_ratio: float, portfolio: 
 
 
 def _portfolio_blocks_add(portfolio: dict[str, Any]) -> bool:
+    if portfolio.get("position_pct_confidence") == "low":
+        return False
     total_ratio = (_num_or_none(portfolio.get("total_position_pct")) or 0.0) / 100.0
     category_ratio = (_num_or_none(portfolio.get("category_pct")) or 0.0) / 100.0
     return total_ratio >= 0.70 or category_ratio >= 0.15
@@ -625,18 +634,29 @@ def _action_copy(action: str, high_risk: bool, score: float) -> list[str]:
 
 def _portfolio_state(position: Position | None, positions: list[Position], category: str) -> dict[str, Any]:
     total_value = sum(item.market_value for item in positions if item.market_value > 0)
-    total_position_pct = sum((item.position_pct or 0) for item in positions if item.market_value > 0)
+    confident_positions = [item for item in positions if item.market_value > 0 and _is_confident_position_pct(item)]
+    low_confidence = bool(positions) and len(confident_positions) != len([item for item in positions if item.market_value > 0])
+    total_position_pct = sum((item.position_pct or 0) for item in confident_positions)
     position_pct = position.position_pct if position and position.position_pct is not None else 0
-    if not position_pct and position and total_value:
-        position_pct = position.market_value / total_value * 100
     category_value = sum(item.market_value for item in positions if classify_etf(item.name) == category)
-    category_position_pct = sum((item.position_pct or 0) for item in positions if classify_etf(item.name) == category)
+    category_position_pct = sum((item.position_pct or 0) for item in confident_positions if classify_etf(item.name) == category)
+    fallback_total_pct = sum((item.position_pct or 0) for item in positions if item.market_value > 0)
+    fallback_category_pct = sum((item.position_pct or 0) for item in positions if item.market_value > 0 and classify_etf(item.name) == category)
     return {
         "category": category,
         "position_pct": position_pct or 0,
         "total_position_pct": total_position_pct or 0,
-        "category_pct": category_position_pct or (category_value / total_value * total_position_pct if total_value else 0),
+        "category_pct": category_position_pct or (category_value / total_value * total_position_pct if total_value and total_position_pct else 0),
+        "position_pct_confidence": "low" if low_confidence else "high",
+        "position_pct_source": position.position_pct_source if position else None,
+        "fallback_holding_total_pct": fallback_total_pct or 0,
+        "fallback_holding_category_pct": fallback_category_pct or 0,
     }
+
+
+def _is_confident_position_pct(position: Position) -> bool:
+    source = str(position.position_pct_source or "")
+    return source in {"ths_account_total_asset", "ths_position_fund_pct"}
 
 
 def _liquidity_threshold(category: str) -> float:
