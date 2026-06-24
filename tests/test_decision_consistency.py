@@ -136,10 +136,10 @@ def test_ai_disabled_renders_compact_status_only():
     assert "占位护栏" not in html
 
 
-def test_report_renders_rule_versions():
+def test_report_hides_rule_versions():
     html = render_html("2026-06-23 14:45:08", [], [], {}, {})
 
-    assert "规则 2026.06.23-v1" in html
-    assert "评分 score-2026.06" in html
-    assert "网格 grid-2026.06" in html
-    assert "风控 risk-2026.06" in html
+    assert "规则 2026.06.23-v1" not in html
+    assert "评分 score-2026.06" not in html
+    assert "网格 grid-2026.06" not in html
+    assert "风控 risk-2026.06" not in html

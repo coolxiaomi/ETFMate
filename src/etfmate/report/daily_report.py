@@ -367,7 +367,7 @@ def _holding_pie(etfs: list[dict[str, Any]]) -> dict[str, Any]:
         {"label": "Top3", "value": f"{top3:.2f}%"},
         {"label": "最大", "value": f"{max_item['code']} {_pct(max_item.get('holding_pct_value'))}" if max_item else "-"},
     ]
-    colors = ["#c01818", "#0f8a4b", "#2563eb", "#b45309", "#52616a", "#7c3aed", "#0891b2", "#be123c", "#4d7c0f", "#9333ea"]
+    colors = ["#d8001b", "#107d32", "#006bff", "#aa4d00", "#4d4d4d", "#00ac96", "#f22782", "#0059ec", "#279141", "#8500d1"]
     segments = []
     cursor = 0.0
     for idx, item in enumerate(held):
