@@ -1,9 +1,17 @@
 ---
 name: etfmate-skill
-description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用于创建、完善或运行 ETFMate 工具：必须先加载并使用 $web-access 连接用户已登录的 Chrome，实时读取同花顺投资账本和 Touker 网格页，再结合 $a-stock-data 七层数据架构、行情指标、持仓备注和网格参数生成中文 HTML 实时分析报告。触发场景包括 ETFMate、ETF 实时分析、同花顺投资账本采集、Touker 网格设置、ETF 持仓建议、网格调参建议、web-access 登录态页面采集、多层证据分析、本地 CLI 工具开发。
+description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用户说“分析ETF”“分析 ETF”“跑ETF”“跑 ETFMate”“生成 ETFMate 报告”，或只指定 etfmate-skill/ETFMate 后加“分析”“干活”“执行”“跑”“开始”，甚至只指定本 skill 而没有其它动作时，默认运行完整 ETFMate 实时流程：先用 $web-access 连接用户已登录的 Chrome，实时采集同花顺投资账本和 Touker 网格，再结合 $a-stock-data 七层数据、行情指标、持仓备注和网格参数生成中文 HTML 实时分析报告，最后使用 $shareone 发布报告并返回链接。触发场景还包括 ETF 实时分析、同花顺投资账本采集、Touker 网格设置、ETF 持仓建议、网格调参建议、web-access 登录态页面采集、多层证据分析、本地 CLI 工具开发。
 ---
 
 # ETFMate Skill
+
+## 快捷触发与默认动作
+
+- 用户说“分析ETF”“分析 ETF”“跑ETF”“跑 ETFMate”“生成 ETFMate 报告”“更新 ETF 持仓分析”等短口令时，必须使用本 skill，不要退回通用金融分析。
+- 用户明确写出 `etfmate-skill`、`ETFMate`、`$etfmate-skill` 或类似指定方式时，即使只追加“分析”“干活”“执行”“跑”“开始”，或没有追加任何动作，也按“完整实时分析并发布报告”处理。
+- 上述快捷触发的默认目标是：采集同花顺投资账本和 Touker 网格 -> 计算行情指标和七层证据 -> 运行本地规则引擎 -> 由宿主 AI 复核 `ai_review_input.json` 并写回 `ai_judgements.json` -> 生成中文 HTML 报告 -> 使用 `$shareone` 发布报告 -> 返回报告路径和 ShareOne 链接。
+- 如果用户明确说“不发布”“只生成本地报告”“不要 ShareOne”，则只生成本地 HTML 报告，不调用 `$shareone`。
+- 如果同花顺、Touker、web-access、登录态、验证码、风控或滚动加载完整性不满足正式分析要求，必须停止并提示用户处理；不得生成最终建议，也不得发布 ShareOne。
 
 ## 核心原则
 
@@ -33,6 +41,7 @@ description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用于�
 4. 如果任一页面是登录页、验证码页、风控页、协议确认页或页面未加载出关键数据，立即停止并提示用户在 Chrome 中手动处理；用户处理后刷新或继续同一流程。
 5. 只有同花顺持仓/交易和 Touker 网格都采集成功，才继续行情指标和规则建议生成。
 6. `analyze` 会生成 `data/raw/market/RUN_ID/ai_review_input.json`；宿主 AI 必须读取该文件，使用当前会话模型生成 `ai_judgements.json`，再生成 HTML 报告。
+7. 报告完整生成后，若本次来自快捷触发或用户没有明确禁止发布，必须加载 `$shareone` skill 发布生成的 HTML 报告，并在最终回答中返回本地报告路径和 ShareOne 链接；核心数据不完整或报告生成失败时不得发布。
 
 目标页面：
 
@@ -137,7 +146,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/check-deps.mjs"
 - 每只 ETF 必须展示“规则评分”和“AI综合研判”。规则评分展示综合/趋势评分/动量/风险/过滤状态；AI 综合研判展示是否启用、置信度、冲突点和护栏。AI 未启用时必须明示原因。报告中不得出现趋势评分的英文旧名，统一写“趋势评分”。
 - AI 综合研判显示“待宿主AI复核”时，说明本地规则分析已经完成，但当前宿主还没有把 `ai_judgements.json` 写回；不得提示用户配置额外 API Key。AI 未启用或置信度为 0 时，单只 ETF 只显示一行“AI复核未启用，本次采用规则引擎”，不要展开大段占位研判；AI 置信度低于 60% 时只做摘要展示，不改变规则动作。
 - 单只 ETF 总述不要展示 `quote:tencent;kline:tencent` 等内部 source key。数据完整性表里也要用人能看懂的来源描述。
-- HTML 页面不要写入 ShareOne 发布提示。用户明确要求发布时，再使用 `$shareone` skill。
+- HTML 页面不要写入 ShareOne 发布提示。快捷触发和默认运行视为要求发布，报告完整生成后使用 `$shareone` skill 发布；用户明确禁止发布时不发布。
 
 ## P0 验收标准
 
