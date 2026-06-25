@@ -18,6 +18,8 @@
 ```text
 A股场内宽基 ETF
 A股场内行业 / 主题 ETF
+A股场内商品 / 黄金 ETF
+A股场内跨境 / QDII ETF
 ```
 
 不覆盖：
@@ -25,8 +27,6 @@ A股场内行业 / 主题 ETF
 ```text
 债券 ETF
 货币 ETF
-商品 / 黄金 ETF
-跨境 / QDII ETF
 杠杆 / 反向 ETF
 REITs
 ```
@@ -226,7 +226,9 @@ https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO
 宽基 ETF
 行业 ETF
 主题 ETF
-场内基金中明确属于权益宽基、行业、主题方向的品种
+商品 / 黄金 ETF
+跨境 / QDII ETF
+场内基金中明确属于宽基、行业、主题、商品、黄金、跨境或 QDII 方向的品种
 ```
 
 过滤：
@@ -237,11 +239,9 @@ A股股票
 港股股票
 债券 ETF
 货币 ETF
-商品 / 黄金 ETF
-跨境 / QDII ETF
 杠杆 / 反向 ETF
 REITs
-其他非宽基、行业、主题 ETF 标的
+其他非宽基、行业、主题、商品、黄金、跨境或 QDII ETF 标的
 ```
 
 识别优先级：
@@ -251,8 +251,10 @@ REITs
 2. 名称包含 ETF / LOF / 基金 作为辅助确认。
 3. 名称包含 沪深300 / 中证500 / 创业板 / 科创 / 上证50 等宽基特征，归为宽基 ETF。
 4. 名称包含 证券 / 半导体 / 芯片 / 军工 / 新能源 / 医药 / 消费 / 人工智能 等行业主题特征，归为行业/主题 ETF。
-5. 名称包含 债 / 货币 / 现金 / 黄金 / 商品 / QDII / 纳指 / 标普 / 恒生 / REIT 等特征时，默认过滤，除非后续启用独立模型。
-6. 11 / 12 / 123 / 127 / 128 等可转债代码段和名称含“转债/可转债”的标的直接过滤。
+5. 名称包含 黄金 / 商品 / 豆粕 / 能源化工 / 有色 等特征，且代码属于 A 股场内基金代码段时，归为商品 / 黄金 ETF，纳入分析和建议。
+6. 名称包含 QDII / 纳指 / 标普 / 恒生 / 港股 / 中概 / 日经 等特征，且代码属于 A 股场内基金代码段时，归为跨境 / QDII ETF，纳入分析和建议。
+7. 名称包含 债 / 货币 / 现金 / REIT 等特征时，默认过滤，除非后续启用独立模型。
+8. 11 / 12 / 123 / 127 / 128 等可转债代码段和名称含“转债/可转债”的标的直接过滤。
 ```
 
 ---
@@ -514,8 +516,8 @@ AI 不得输出：
 ```python
 def decide_rule(etf, position, portfolio):
     # 1. ETF universe 过滤
-    if not is_supported_equity_etf(etf):
-        return forbid(etf, reason="不属于当前宽基/行业/主题ETF模型适用范围")
+    if not is_supported_exchange_traded_fund(etf):
+        return forbid(etf, reason="不属于当前 ETF/LOF/场内基金分析范围")
 
     # 2. 交易硬过滤
     forbidden_reason = check_hard_filter(etf)
@@ -600,7 +602,6 @@ def decide_rule(etf, position, portfolio):
 1. rule.md 不再定义第二套趋势评分。
 2. rule.md 不再计算 momentumScore、riskScore、totalScore。
 3. rule.md 只消费 score.md 的 ShortTrendScore 和 action.md 的仓位动作结果。
-4. 当前模型只覆盖宽基 ETF、行业 ETF、主题 ETF。
+4. 当前模型覆盖宽基 ETF、行业 ETF、主题 ETF、商品 / 黄金 ETF、跨境 / QDII ETF；不同类型在流动性阈值、仓位动作和解释文案上应保持区分。
 5. ATR 不进入趋势评分和核心仓位动作，只进入网格建议或独立波动模块。
 6. 所有输出必须是建议和风险提示，不得输出绝对交易指令。
-

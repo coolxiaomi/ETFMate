@@ -48,6 +48,8 @@ ShortTrendScore 不直接等于买入或卖出信号。
 宽基 ETF
 行业 ETF
 主题 ETF
+商品 / 黄金 ETF
+跨境 / QDII ETF
 ```
 
 示例：
@@ -55,6 +57,8 @@ ShortTrendScore 不直接等于买入或卖出信号。
 ```text
 宽基 ETF：沪深300ETF、中证500ETF、创业板ETF、科创50ETF、上证50ETF等
 行业/主题 ETF：证券ETF、半导体ETF、芯片ETF、军工ETF、新能源ETF、医药ETF、消费ETF等
+商品/黄金 ETF：黄金ETF、豆粕ETF、有色ETF、能源化工ETF等
+跨境/QDII ETF：纳指ETF(QDII)、标普ETF、恒生科技ETF、中概互联ETF、日经ETF等
 ```
 
 当前版本不覆盖：
@@ -62,8 +66,6 @@ ShortTrendScore 不直接等于买入或卖出信号。
 ```text
 债券 ETF
 货币 ETF
-商品 / 黄金 ETF
-跨境 / QDII ETF
 杠杆 / 反向 ETF
 REITs
 ```
@@ -71,8 +73,9 @@ REITs
 说明：
 
 ```text
-上述不覆盖品种并非不能分析，而是不应直接复用本趋势评分模型。
-如果后续纳入跨境、商品、债券或货币类 ETF，应单独设计评分解释、流动性阈值和仓位动作规则。
+商品 / 黄金 ETF、跨境 / QDII ETF 必须进入分析和建议，不得在候选池过滤阶段排除。
+ShortTrendScore 对这些品种仍作为短线技术趋势评分使用；规则层需要结合 ETF 类型使用不同流动性阈值、仓位约束和风险解释。
+债券、货币、杠杆/反向和 REITs 暂不直接套用本趋势评分解释，除非后续启用独立模型。
 ```
 
 ---
@@ -338,7 +341,7 @@ BOLL_POSITION = clamp(BOLL_POSITION, 0, 1)
 ```text
 BOLL_POSITION 越接近 1，说明越靠近上轨；
 BOLL_POSITION 越接近 0，说明越靠近下轨；
-对于宽基和行业/主题 ETF，0.60 ~ 0.90 通常代表短线偏强但尚未极端过热。
+对于宽基、行业/主题、商品/黄金和跨境/QDII ETF，0.60 ~ 0.90 通常代表短线偏强但尚未极端过热；跨境和商品类还需要额外关注外盘、汇率、商品价格或溢价风险。
 ```
 
 ---
@@ -663,6 +666,8 @@ ATR风险扣分
 ```text
 BROAD_BASED      宽基 ETF
 INDUSTRY_THEME   行业/主题 ETF
+COMMODITY_GOLD   商品/黄金 ETF
+CROSS_BORDER     跨境/QDII ETF
 ```
 
 ---
@@ -838,11 +843,10 @@ FinalScore = 0.7 * MomentumScore + 0.3 * ShortTrendScore
 
 ## 18. 关键结论
 
-1. 本模型只适用于宽基 ETF、行业 ETF、主题 ETF 的短线趋势评分。
+1. 本模型适用于宽基 ETF、行业 ETF、主题 ETF、商品/黄金 ETF、跨境/QDII ETF 的短线趋势评分。
 2. `ShortTrendScore` 只由 MA、BOLL、VOL、RSI、BIAS 五项构成。
 3. 五项正向指标合计 100 分，不需要 `/90 * 100` 归一化。
 4. ATR 不进入趋势评分，不生成 ATR 扣分，也不影响趋势等级。
 5. ATR 应迁移到网格建议或独立波动模块。
 6. 趋势等级不再使用“强势进攻区”，改为“短线强趋势”。
 7. 系统输出应是分析与风险提示，不应输出绝对买卖指令。
-
