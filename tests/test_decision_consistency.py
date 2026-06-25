@@ -10,7 +10,7 @@ from etfmate.analysis import rule_engine
 from etfmate.analysis.grid_advisor import advise_grid
 from etfmate.analysis.trade_reviewer import review_trade_periods
 from etfmate.cli import _position as _cli_position
-from etfmate.report.daily_report import _ai_judgement_html, render_html
+from etfmate.report.daily_report import _ai_judgement_html, _holding_view, render_html
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position, Trade
 
 
@@ -463,3 +463,47 @@ def test_report_hides_rule_versions():
     assert "评分 score-2026.06" not in html
     assert "网格 grid-2026.06" not in html
     assert "风控 risk-2026.06" not in html
+
+
+def test_indicator_metric_values_are_colored_by_context():
+    view = _holding_view(
+        {
+            "code": "159999",
+            "name": "测试ETF",
+            "last_price": 1.2,
+            "boll_position_pct": 95.0,
+            "boll_upper": 1.18,
+            "boll_mid": 1.0,
+            "boll_lower": 0.82,
+            "ma5": 1.1,
+            "ma10": 1.05,
+            "ma20": 0.98,
+            "ma60": 1.25,
+            "ma200": None,
+            "ma_status": "上MA5/下MA60",
+            "volume": 1000000,
+            "vol_ratio": 2.1,
+            "turnover_pct": 6.0,
+            "amount_ratio20": 0.65,
+            "vol_ma5": 200,
+            "vol_ma20": 100,
+            "atr7_pct": 5.2,
+            "atr14_pct": 4.6,
+            "atr30_pct": 3.0,
+            "atr60_pct": 1.8,
+            "bias6": 7.0,
+            "bias12": 3.5,
+            "bias24": -3.2,
+            "rsi6": 88,
+            "rsi14": 28,
+        }
+    )
+    html = "".join(str(row.get("current", "")) + str(row.get("reference", "")) for row in view["rows"])
+
+    assert '<span class="danger">95.00%</span>' in html
+    assert '<span class="profit">1.100</span>' in html
+    assert '<span class="loss">1.250</span>' in html
+    assert '<span class="warn">2.10</span>' in html
+    assert '<span class="danger">5.20%</span>' in html
+    assert '<span class="danger">+7.00%</span>' in html
+    assert '<span class="attention">28.0</span>' in html

@@ -510,16 +510,79 @@ def _pnl_alert(value: Any) -> str:
     return _cell_html("持平")
 
 
+def _colored_num(value: Any, digits: int, cls: str) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "-"
+    return _span(f"{number:.{digits}f}" if digits > 0 else f"{number:.0f}", cls)
+
+
+def _colored_signed_num(value: Any, digits: int, cls: str, suffix: str = "") -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "-"
+    return _span(f"{number:+.{digits}f}{suffix}", cls)
+
+
+def _colored_pct(value: Any, cls: str) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "-"
+    return _span(f"{number:.2f}%", cls)
+
+
+def _boll_position_class(item: dict) -> str:
+    price = _float_or_none(item.get("last_price"))
+    lower = _float_or_none(item.get("boll_lower"))
+    upper = _float_or_none(item.get("boll_upper"))
+    pos = _float_or_none(item.get("boll_position_pct"))
+    if price is not None and upper is not None and price >= upper:
+        return "danger"
+    if price is not None and lower is not None and price <= lower:
+        return "loss strong"
+    if pos is None:
+        return "neutral"
+    if pos >= 85:
+        return "warn"
+    if pos <= 20:
+        return "attention"
+    return "neutral"
+
+
+def _colored_price_against_band(value: Any, item: dict) -> str:
+    price = _float_or_none(value)
+    if price is None:
+        return "-"
+    lower = _float_or_none(item.get("boll_lower"))
+    upper = _float_or_none(item.get("boll_upper"))
+    pos = _float_or_none(item.get("boll_position_pct"))
+    cls = "neutral"
+    if upper is not None and price >= upper:
+        cls = "danger"
+    elif lower is not None and price <= lower:
+        cls = "loss strong"
+    elif pos is not None and pos >= 85:
+        cls = "warn"
+    elif pos is not None and pos <= 20:
+        cls = "attention"
+    return _colored_num(price, 3, cls)
+
+
 def _boll_summary(item: dict) -> str:
-    return f"分位 {_pct(item.get('boll_position_pct'))}；现价 {_num(item.get('last_price'), 3)}"
+    return "；".join(
+        [
+            f"分位 {_colored_pct(item.get('boll_position_pct'), _boll_position_class(item))}",
+            f"现价 {_colored_price_against_band(item.get('last_price'), item)}",
+        ]
+    )
 
 
 def _boll_levels(item: dict) -> str:
     return "；".join(
         [
-            f"上: {_num(item.get('boll_upper'), 3)}",
-            f"中: {_num(item.get('boll_mid'), 3)}",
-            f"下: {_num(item.get('boll_lower'), 3)}",
+            f"上: {_colored_num(item.get('boll_upper'), 3, 'warn')}",
+            f"中: {_colored_num(item.get('boll_mid'), 3, 'neutral')}",
+            f"下: {_colored_num(item.get('boll_lower'), 3, 'attention')}",
         ]
     )
 
@@ -540,20 +603,41 @@ def _boll_alert(item: dict) -> str:
     return _span("轨道内运行", "neutral")
 
 
+def _colored_ma_value(value: Any, price: float | None) -> str:
+    ma = _float_or_none(value)
+    if ma is None:
+        return "-"
+    if price is None:
+        return _colored_num(ma, 3, "neutral")
+    return _colored_num(ma, 3, "profit" if price >= ma else "loss")
+
+
+def _ma_status_html(value: Any) -> str:
+    text = _cell(value)
+    if text == "-":
+        return "-"
+    parts = []
+    for part in text.split("/"):
+        cls = "profit" if part.startswith("上") else "loss" if part.startswith("下") else "neutral"
+        parts.append(_span(part, cls))
+    return "/".join(parts)
+
+
 def _ma_summary(item: dict) -> str:
+    price = _float_or_none(item.get("last_price"))
     return "；".join(
         [
-            f"5: {_num(item.get('ma5'), 3)}",
-            f"10: {_num(item.get('ma10'), 3)}",
-            f"20: {_num(item.get('ma20'), 3)}",
-            f"60: {_num(item.get('ma60'), 3)}",
-            f"200: {_num(item.get('ma200'), 3)}",
+            f"5: {_colored_ma_value(item.get('ma5'), price)}",
+            f"10: {_colored_ma_value(item.get('ma10'), price)}",
+            f"20: {_colored_ma_value(item.get('ma20'), price)}",
+            f"60: {_colored_ma_value(item.get('ma60'), price)}",
+            f"200: {_colored_ma_value(item.get('ma200'), price)}",
         ]
     )
 
 
 def _ma_compare(item: dict) -> str:
-    return _cell_html(item.get("ma_status"))
+    return _ma_status_html(item.get("ma_status"))
 
 
 def _ma_alert(item: dict) -> str:
@@ -574,13 +658,34 @@ def _ma_alert(item: dict) -> str:
     return _span("均线信号中性", "neutral")
 
 
+def _atr_class(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "neutral"
+    if number >= 5:
+        return "danger"
+    if number >= 4:
+        return "warn"
+    if number <= 2:
+        return "attention"
+    return "neutral"
+
+
+def _atr_ratio_class(value: float) -> str:
+    if value >= 1.25:
+        return "warn"
+    if value <= 0.8:
+        return "attention"
+    return "neutral"
+
+
 def _atr_summary(item: dict) -> str:
     return "；".join(
         [
-            f"7: {_pct(item.get('atr7_pct'))}",
-            f"14: {_pct(item.get('atr14_pct'))}",
-            f"30: {_pct(item.get('atr30_pct'))}",
-            f"60: {_pct(item.get('atr60_pct'))}",
+            f"7: {_colored_pct(item.get('atr7_pct'), _atr_class(item.get('atr7_pct')))}",
+            f"14: {_colored_pct(item.get('atr14_pct'), _atr_class(item.get('atr14_pct')))}",
+            f"30: {_colored_pct(item.get('atr30_pct'), _atr_class(item.get('atr30_pct')))}",
+            f"60: {_colored_pct(item.get('atr60_pct'), _atr_class(item.get('atr60_pct')))}",
         ]
     )
 
@@ -591,7 +696,7 @@ def _atr_compare(item: dict) -> str:
     if atr14 is None or atr30 is None:
         return _cell_html("波动数据不足")
     ratio = atr14 / atr30 if atr30 else 0
-    return _cell_html(f"14/30 {ratio:.2f} 倍")
+    return f"14/30 {_colored_num(ratio, 2, _atr_ratio_class(ratio))} 倍"
 
 
 def _atr_alert(item: dict) -> str:
@@ -611,11 +716,32 @@ def _atr_alert(item: dict) -> str:
 def _bias_summary(item: dict) -> str:
     return "；".join(
         [
-            f"6: {_signed_metric_pct(item.get('bias6'))}",
-            f"12: {_signed_metric_pct(item.get('bias12'))}",
-            f"24: {_signed_metric_pct(item.get('bias24'))}",
+            f"6: {_colored_bias_pct(item.get('bias6'))}",
+            f"12: {_colored_bias_pct(item.get('bias12'))}",
+            f"24: {_colored_bias_pct(item.get('bias24'))}",
         ]
     )
+
+
+def _colored_bias_pct(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "-"
+    if number >= 6:
+        cls = "danger"
+    elif number >= 3:
+        cls = "warn"
+    elif number > 0:
+        cls = "profit"
+    elif number <= -6:
+        cls = "loss strong"
+    elif number <= -3:
+        cls = "attention"
+    elif number < 0:
+        cls = "loss"
+    else:
+        cls = "neutral"
+    return _colored_signed_num(number, 2, cls, "%")
 
 
 def _bias_compare(item: dict) -> str:
@@ -638,12 +764,37 @@ def _bias_alert(item: dict) -> str:
     return _span("乖离温和", "neutral")
 
 
+def _rsi_class(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "neutral"
+    if number >= 85:
+        return "danger"
+    if number >= 70:
+        return "warn"
+    if number <= 20:
+        return "loss strong"
+    if number <= 40:
+        return "attention"
+    return "neutral"
+
+
 def _rsi_summary(item: dict) -> str:
-    return "；".join([f"6: {_num(item.get('rsi6'), 1)}", f"14: {_num(item.get('rsi14'), 1)}"])
+    return "；".join(
+        [
+            f"6: {_colored_num(item.get('rsi6'), 1, _rsi_class(item.get('rsi6')))}",
+            f"14: {_colored_num(item.get('rsi14'), 1, _rsi_class(item.get('rsi14')))}",
+        ]
+    )
 
 
 def _rsi_compare(item: dict) -> str:
-    return _cell_html("RSI6用于短线趋势评分；<30偏弱/超卖；30-70中性；>70偏强/过热")
+    return (
+        "RSI6用于短线趋势评分；"
+        f"{_span('<30偏弱/超卖', 'attention')}；"
+        f"{_span('30-70中性', 'neutral')}；"
+        f"{_span('>70偏强/过热', 'warn')}"
+    )
 
 
 def _rsi_alert(item: dict) -> str:
@@ -1071,13 +1222,52 @@ def _rule_score_alert(item: dict) -> str:
     return _span("规则允许正常复核", "neutral")
 
 
+def _volume_ratio_class(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "neutral"
+    if number >= 2:
+        return "warn"
+    if number >= 1.2:
+        return "profit"
+    if number <= 0.75:
+        return "attention"
+    return "neutral"
+
+
+def _turnover_class(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "neutral"
+    if number >= 10:
+        return "warn"
+    if number >= 5:
+        return "profit"
+    if number < 1:
+        return "attention"
+    return "neutral"
+
+
+def _amount_ratio_class(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "neutral"
+    if number >= 1.5:
+        return "warn"
+    if number >= 1.1:
+        return "profit"
+    if number <= 0.7:
+        return "attention"
+    return "neutral"
+
+
 def _volume_summary(item: dict) -> str:
     return "；".join(
         [
-            f"成交量 {_num(item.get('volume'), 0)}",
-            f"量比 {_num(item.get('vol_ratio'), 2)}",
-            f"换手 {_pct(item.get('turnover_pct'))}",
-            f"成交额/20日 {_num(item.get('amount_ratio20'), 2)}",
+            f"成交量 {_colored_num(item.get('volume'), 0, 'neutral')}",
+            f"量比 {_colored_num(item.get('vol_ratio'), 2, _volume_ratio_class(item.get('vol_ratio')))}",
+            f"换手 {_colored_pct(item.get('turnover_pct'), _turnover_class(item.get('turnover_pct')))}",
+            f"成交额/20日 {_colored_num(item.get('amount_ratio20'), 2, _amount_ratio_class(item.get('amount_ratio20')))}",
         ]
     )
 
@@ -1087,7 +1277,8 @@ def _volume_compare(item: dict) -> str:
     vol20 = _float_or_none(item.get("vol_ma20"))
     if vol5 is None or vol20 is None:
         return _cell_html("量能均线不足")
-    return _cell_html(f"5/20: {vol5 / vol20:.2f} 倍")
+    ratio = vol5 / vol20 if vol20 else 0
+    return f"5/20: {_colored_num(ratio, 2, _volume_ratio_class(ratio))} 倍"
 
 
 def _volume_alert(item: dict) -> str:
