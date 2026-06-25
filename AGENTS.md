@@ -2,7 +2,7 @@
 
 ## 项目结构与模块组织
 
-ETFMate 是一个 Python 3.10+ CLI 项目，源码位于 `src/etfmate`。核心模块按职责拆分：`browser/` 负责采集已登录的同花顺投资账本和 Touker 网格数据，`market/` 负责构建 ETF 行情快照，`analysis/` 包含规则引擎、网格建议、AI 复核输入和交易复盘，`report/` 负责用 `report/templates/` 渲染 HTML 报告，`storage/` 维护数据模型和 JSON 读写。测试位于 `tests/`。产品规则、评分和报告契约位于 `docs/`。仓库内的 agent skill 契约位于 `.agents/skills/etfmate-skill/`。运行采集结果和生成报告写入 `data/`，该目录不进入 Git。
+ETFMate 是一个 Python 3.10+ CLI 项目，源码位于 `src/etfmate`。核心模块按职责拆分：`browser/` 负责采集已登录的同花顺投资账本和 Touker 网格数据，`market/` 负责构建 ETF 行情快照，`analysis/` 包含规则引擎、网格建议、AI 复核输入和交易复盘，`report/` 负责用 `report/templates/` 渲染 HTML 报告，`storage/` 维护数据模型和 JSON 读写。测试位于 `tests/`。产品规则、评分和报告契约位于 `docs/`。仓库内的 agent skill 契约位于 `.skills/etfmate-skill/`。运行采集结果和生成报告写入 `data/`，该目录不进入 Git。
 
 ## 构建、测试与本地开发命令
 
