@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -547,6 +548,52 @@ def test_report_hides_rule_versions():
     assert "评分 score-2026.06" not in html
     assert "网格 grid-2026.06" not in html
     assert "风控 risk-2026.06" not in html
+
+
+def test_report_etf_display_order_uses_trend_holding_and_pnl_desc():
+    recommendations = [
+        _report_item("159901", "低趋势", 80, 30, 8),
+        _report_item("159902", "高趋势", 90, 1, -5),
+        _report_item("159903", "同分高仓低盈", 80, 35, -1),
+        _report_item("159904", "同分高仓高盈", 80, 35, 3),
+    ]
+    grids = [{"code": item["code"], "name": item["name"], "action": "维持网格"} for item in recommendations]
+
+    html = render_html("2026-06-25 10:00:00", recommendations, grids, {}, {})
+    expected_codes = ["159902", "159904", "159903", "159901"]
+
+    article_ids = re.findall(r'<article class="etf-card filter-item"[^>]+id="etf-(\d+)"', html)
+    assert article_ids == expected_codes
+    _assert_link_order(_panel_html(html, "decision", "trend"), expected_codes)
+    _assert_link_order(_panel_html(html, "trend", "holding"), expected_codes)
+    _assert_link_order(_panel_html(html, "holding", "pnl"), expected_codes)
+    _assert_link_order(_panel_html(html, "pnl", "grid"), expected_codes)
+    _assert_link_order(_panel_html(html, "grid", "risk"), expected_codes)
+
+
+def _report_item(code: str, name: str, trend_score: float, holding_pct: float, pnl_pct: float) -> dict:
+    return {
+        "code": code,
+        "name": name,
+        "action": "持有",
+        "quantity": 1000,
+        "last_price": 1.0,
+        "cost_price": 1.0,
+        "market_value": 1000,
+        "position_pct": holding_pct / 2,
+        "holding_pct": holding_pct,
+        "pnl_pct": pnl_pct,
+        "rule_trend_score": trend_score,
+        "rule_decision": {"trend_score": trend_score, "trend_level": "测试趋势"},
+    }
+
+
+def _panel_html(html: str, panel: str, next_panel: str) -> str:
+    return html.split(f'data-panel="{panel}"', 1)[1].split(f'data-panel="{next_panel}"', 1)[0]
+
+
+def _assert_link_order(html: str, expected_codes: list[str]) -> None:
+    assert re.findall(r'href="#etf-(\d+)"', html) == expected_codes
 
 
 def test_indicator_metric_values_are_colored_by_context():

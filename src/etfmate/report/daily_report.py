@@ -21,7 +21,7 @@ def render_html(
     data_completeness: dict | None = None,
 ) -> str:
     template = _template_env().get_template("daily_report.html")
-    etfs = [_etf_view(item) for item in _group_by_etf(recommendations, grid_advices)]
+    etfs = _sort_etfs_for_display([_etf_view(item) for item in _group_by_etf(recommendations, grid_advices)])
     return template.render(
         date=date,
         recommendations_count=len(recommendations),
@@ -112,6 +112,10 @@ def _etf_view(item: dict) -> dict[str, Any]:
     is_grid = bool(grid and grid.get("grid_applicable") is not False)
     is_pool = _is_clean_watchlist_item(rec)
     trend_score = _float_or_none(rec.get("rule_trend_score")) if rec else None
+    holding_pct = _float_or_none(rec.get("holding_pct")) if rec else None
+    if holding_pct is None and rec:
+        holding_pct = _float_or_none(rec.get("position_pct"))
+    pnl_pct = _float_or_none(rec.get("pnl_pct")) if rec else None
     return {
         "id": f"etf-{_anchor(code)}",
         "code": code,
@@ -122,6 +126,8 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "filter_tags": _filter_tags(is_held, is_grid, is_pool),
         "pnl_class": pnl_class,
         "pnl_text": _pnl_text(rec),
+        "holding_pct_value": holding_pct,
+        "pnl_pct_value": pnl_pct,
         "position_pct_value": _float_or_none(rec.get("position_pct")) if rec else None,
         "position_pct_text": _pct(rec.get("position_pct")) if rec and rec.get("position_pct") is not None else "-",
         "trend_score": trend_score,
@@ -327,7 +333,7 @@ def _nav_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         grouped.setdefault(str(etf.get("nav_heat") or "平"), []).append(etf)
     result = []
     for key in order:
-        items = grouped.get(key) or []
+        items = _sort_etfs_for_display(grouped.get(key) or [])
         if not items:
             continue
         action_counts: dict[str, int] = {}
@@ -358,7 +364,7 @@ def _action_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         groups.setdefault(str(etf.get("nav_action") or "待定"), []).append(etf)
     result = []
     for key in order + sorted(key for key in groups if key not in order):
-        items = groups.get(key) or []
+        items = _sort_etfs_for_display(groups.get(key) or [])
         if items:
             result.append({"action": key, "count": len(items), "class": items[0].get("nav_action_class", "neutral"), "etfs": items})
     return result
@@ -366,10 +372,11 @@ def _action_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _holding_pie(etfs: list[dict[str, Any]]) -> dict[str, Any]:
     held = [item for item in etfs if (item.get("position_pct_value") or 0) > 0]
-    held.sort(key=lambda item: item.get("position_pct_value") or 0, reverse=True)
+    metric_held = sorted(held, key=lambda item: item.get("position_pct_value") or 0, reverse=True)
+    held = _sort_etfs_for_display(held)
     total = sum(item.get("position_pct_value") or 0 for item in held)
-    top3 = sum(item.get("position_pct_value") or 0 for item in held[:3])
-    max_item = held[0] if held else None
+    top3 = sum(item.get("position_pct_value") or 0 for item in metric_held[:3])
+    max_item = metric_held[0] if metric_held else None
     metrics = [
         {"label": "持", "value": f"{len(held)}只"},
         {"label": "资金仓", "value": f"{total:.2f}%"},
@@ -394,8 +401,7 @@ def _holding_pie(etfs: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _pnl_dashboard(etfs: list[dict[str, Any]]) -> dict[str, Any]:
-    items = [item for item in etfs if item.get("pnl_class") in {"profit", "loss"}]
-    items.sort(key=lambda item: _float_or_none_from_text(item.get("pnl_text")) or 0, reverse=True)
+    items = _sort_etfs_for_display([item for item in etfs if item.get("pnl_class") in {"profit", "loss"}])
     max_abs = max((abs(_float_or_none_from_text(item.get("pnl_text")) or 0) for item in items), default=0)
     rows = []
     for item in items:
@@ -412,7 +418,13 @@ def _grid_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for etf in etfs:
         groups.setdefault(str(etf.get("grid_action_short") or "无网格"), []).append(etf)
-    return [{"action": key, "count": len(items), "class": items[0].get("grid_action_class", "neutral"), "etfs": items} for key, items in sorted(groups.items(), key=lambda pair: (-len(pair[1]), pair[0]))]
+    return [
+        {"action": key, "count": len(items), "class": items[0].get("grid_action_class", "neutral"), "etfs": items}
+        for key, items in (
+            (key, _sort_etfs_for_display(items))
+            for key, items in sorted(groups.items(), key=lambda pair: (-len(pair[1]), pair[0]))
+        )
+    ]
 
 
 def _risk_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -420,9 +432,25 @@ def _risk_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _trend_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    items = [item for item in etfs if item.get("trend_score") is not None]
-    items.sort(key=lambda item: (-(item.get("trend_score") or 0), item.get("code")))
-    return items
+    return _sort_etfs_for_display([item for item in etfs if item.get("trend_score") is not None])
+
+
+def _sort_etfs_for_display(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(etfs, key=_etf_display_sort_key)
+
+
+def _etf_display_sort_key(item: dict[str, Any]) -> tuple[float, float, float, str]:
+    return (
+        -_sort_number(item.get("trend_score")),
+        -_sort_number(item.get("holding_pct_value")),
+        -_sort_number(item.get("pnl_pct_value")),
+        str(item.get("code") or ""),
+    )
+
+
+def _sort_number(value: Any) -> float:
+    number = _float_or_none(value)
+    return number if number is not None else float("-inf")
 
 
 def _title_meta(item: dict | None, grid: dict | None) -> str:
