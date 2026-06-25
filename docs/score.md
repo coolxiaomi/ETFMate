@@ -760,37 +760,9 @@ close == 0
 最终 ShortTrendScore 输出保留 2 位小数。
 ```
 
----
+---  
 
-## 15. Java 伪代码
-
-```java
-public ShortTrendScoreResult calculateShortTrendScore(List<KLine> klines) {
-    // 1. 按 tradeDate 升序排序
-    // 2. 取最后一条作为当前交易日
-    // 3. 计算 MA5、MA10、MA20
-    // 4. 计算 MA5_SLOPE_3
-    // 5. 计算 VOL5、VOL20、VOL_RATIO_1_5、VOL_RATIO_5_20
-    // 6. 计算 BOLL20
-    // 7. 计算 BIAS5
-    // 8. 计算 RSI6
-    // 9. 分别计算 MA_SCORE、BOLL_SCORE、VOL_SCORE、RSI_SCORE、BIAS_SCORE
-    // 10. 计算 shortTrendScore = clamp(maScore + bollScore + volScore + rsiScore + biasScore, 0, 100)
-    // 11. 生成 TrendLevel、TrendName、tags
-    // 12. 返回 ShortTrendScoreResult
-}
-```
-
-核心计算示例：
-
-```java
-double rawScore = maScore + bollScore + volScore + rsiScore + biasScore;
-double shortTrendScore = clamp(rawScore, 0.0, 100.0);
-```
-
----
-
-## 16. 使用建议
+## 15. 使用建议
 
 ```text
 ShortTrendScore >= 75:
@@ -828,7 +800,7 @@ ShortTrendScore < 45:
 
 ---
 
-## 17. 与 ETF 轮动主模型的关系
+## 16. 与 ETF 轮动主模型的关系
 
 该算法不是 ETF 轮动主排序因子。
 
@@ -849,7 +821,7 @@ FinalScore = 0.7 * MomentumScore + 0.3 * ShortTrendScore
 
 ---
 
-## 18. 关键结论
+## 17. 关键结论
 
 1. 本模型适用于宽基 ETF、行业 ETF、主题 ETF、商品/黄金 ETF、跨境/QDII ETF 的短线趋势评分。
 2. `ShortTrendScore` 只由 MA、BOLL、VOL、RSI、BIAS 五项构成。

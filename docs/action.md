@@ -465,8 +465,10 @@ EXIT_TREND_POSITION 表示退出短线仓位或降至观察仓位，不等于系
 ShortTrendScore >= 75
 close > MA5
 MA5 > MA10
+VOL_RATIO_1_5 >= 1.1
 不存在 BIAS严重偏离MA5
 不存在 放量急涨
+不存在 短线量能不足
 ```
 
 更强加仓条件：
@@ -491,6 +493,12 @@ maxAddStepRatio = 0.10
 
 ```text
 单次最多加 10% 仓位
+```
+
+说明：
+
+```text
+代码实现必须保持该上限，不能把单次最大加仓扩大到 20%。
 ```
 
 加仓公式：
@@ -547,6 +555,7 @@ score >= 85 且连续 2 天保持强势:
 ```text
 不是每次评分高都加仓。
 加到目标仓位后停止。
+强趋势但短线量能不足时，先持有等待加仓确认，不因为同类 ETF 占比高而强制转成减仓或止盈。
 ```
 
 ---
@@ -735,175 +744,11 @@ else:
 10. 生成 reasons
 11. 生成 warnings
 12. 返回 PositionDecisionResult
-```
+``` 
 
 ---
 
-## 15. Java 伪代码
-
-```java
-public PositionDecisionResult decidePositionAction(
-        ShortTrendScoreResult trendResult,
-        double currentPositionRatio
-) {
-    double score = trendResult.getShortTrendScore();
-
-    boolean holding = currentPositionRatio > 0;
-    boolean noTrendCaution = noTrendCaution(trendResult);
-    boolean trendCaution = hasTrendCaution(trendResult);
-
-    double baseTargetPositionRatio = calculateBaseTargetPosition(score);
-    double targetPositionRatio = trendCaution
-            ? downgradeTargetPosition(baseTargetPositionRatio)
-            : baseTargetPositionRatio;
-
-    PositionAction action;
-    double adjustRatio = 0.0;
-    double newPositionRatio = currentPositionRatio;
-
-    if (!holding) {
-        if (score >= 85 && noTrendCaution) {
-            action = PositionAction.OPEN;
-            targetPositionRatio = Math.min(targetPositionRatio, 0.15);
-        } else if (score >= 75 && noTrendCaution) {
-            action = PositionAction.LIGHT_OPEN;
-            targetPositionRatio = Math.min(targetPositionRatio, 0.10);
-        } else {
-            action = PositionAction.WATCH;
-            targetPositionRatio = 0.00;
-        }
-
-        adjustRatio = targetPositionRatio;
-        newPositionRatio = targetPositionRatio;
-
-        return buildResult(trendResult, currentPositionRatio, targetPositionRatio,
-                newPositionRatio, action, adjustRatio);
-    }
-
-    double positionGap = targetPositionRatio - currentPositionRatio;
-    double minAdjustRatio = 0.05;
-    boolean seriousWeakTrend = isSeriousWeakTrend(trendResult);
-
-    if (seriousWeakTrend) {
-        action = PositionAction.EXIT_TREND_POSITION;
-    } else if (Math.abs(positionGap) < minAdjustRatio) {
-        action = PositionAction.HOLD;
-    } else if (positionGap > 0) {
-        action = PositionAction.ADD;
-    } else {
-        action = PositionAction.REDUCE;
-    }
-
-    if (action == PositionAction.ADD) {
-        if (score < 75 || trendCaution || !isAddAllowed(trendResult)) {
-            action = PositionAction.HOLD;
-            adjustRatio = 0.0;
-            newPositionRatio = currentPositionRatio;
-        } else {
-            double maxAddStepRatio = 0.10;
-            adjustRatio = Math.min(positionGap, maxAddStepRatio);
-            newPositionRatio = currentPositionRatio + adjustRatio;
-            newPositionRatio = Math.min(newPositionRatio, targetPositionRatio);
-        }
-    } else if (action == PositionAction.REDUCE
-            || action == PositionAction.EXIT_TREND_POSITION) {
-
-        double maxReduceStepRatio = seriousWeakTrend ? 0.50 : 0.30;
-        double reduceGap = Math.max(0, currentPositionRatio - targetPositionRatio);
-        adjustRatio = Math.min(reduceGap, maxReduceStepRatio);
-        newPositionRatio = currentPositionRatio - adjustRatio;
-        newPositionRatio = Math.max(newPositionRatio, targetPositionRatio);
-        newPositionRatio = Math.max(newPositionRatio, 0.0);
-    }
-
-    return buildResult(trendResult, currentPositionRatio, targetPositionRatio,
-            newPositionRatio, action, adjustRatio);
-}
-```
-
----
-
-## 16. 辅助函数伪代码
-
-### 16.1 基础目标仓位
-
-```java
-double calculateBaseTargetPosition(double score) {
-    if (score >= 85) {
-        return 0.30;
-    }
-    if (score >= 75) {
-        return 0.20;
-    }
-    if (score >= 60) {
-        return 0.10;
-    }
-    if (score >= 45) {
-        return 0.05;
-    }
-    return 0.00;
-}
-```
-
-### 16.2 趋势追高降档
-
-```java
-double downgradeTargetPosition(double baseTargetPositionRatio) {
-    if (baseTargetPositionRatio >= 0.30) {
-        return 0.20;
-    }
-    if (baseTargetPositionRatio >= 0.20) {
-        return 0.10;
-    }
-    if (baseTargetPositionRatio >= 0.10) {
-        return 0.05;
-    }
-    if (baseTargetPositionRatio >= 0.05) {
-        return 0.00;
-    }
-    return 0.00;
-}
-```
-
-### 16.3 趋势明显转弱判断
-
-```java
-boolean isSeriousWeakTrend(ShortTrendScoreResult result) {
-    double score = result.getShortTrendScore();
-    double close = result.getIndicators().getClose();
-    double ma5 = result.getIndicators().getMa5();
-    double ma10 = result.getIndicators().getMa10();
-
-    return score < 45
-        && close < ma5
-        && ma5 < ma10;
-}
-```
-
-### 16.4 加仓允许判断
-
-```java
-boolean isAddAllowed(ShortTrendScoreResult result) {
-    double score = result.getShortTrendScore();
-    double close = result.getIndicators().getClose();
-    double ma5 = result.getIndicators().getMa5();
-    double ma10 = result.getIndicators().getMa10();
-    double bias5 = result.getIndicators().getBias5();
-    double rsi6 = result.getIndicators().getRsi6();
-
-    return score >= 75
-        && close > ma5
-        && ma5 > ma10
-        && bias5 <= 0.06
-        && rsi6 <= 85
-        && !result.getTags().contains("放量急涨")
-        && !result.getTags().contains("BIAS严重偏离MA5");
-}
-```
-
----
-
-## 17. 输出结构建议
+## 15. 输出结构建议
 
 ```json
 {
@@ -939,7 +784,7 @@ boolean isAddAllowed(ShortTrendScoreResult result) {
 
 ---
 
-## 18. 禁止输出文案
+## 16. 禁止输出文案
 
 系统不得输出以下绝对化交易指令：
 
@@ -969,7 +814,7 @@ boolean isAddAllowed(ShortTrendScoreResult result) {
 
 ---
 
-## 19. 关键结论
+## 17. 关键结论
 
 1. `ShortTrendScore` 不直接等于买卖信号，应先转换为目标仓位。
 2. 加仓和减仓的核心依据是 `targetPositionRatio - currentPositionRatio`。

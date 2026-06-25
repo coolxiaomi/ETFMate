@@ -22,8 +22,8 @@ ACTION_NAMES = {
     "EXIT_SHORT_TERM": "退出短线仓位",
 }
 MAX_TOTAL_POSITION_RATIO = 0.80
-MAX_CATEGORY_POSITION_RATIO = 0.15
 MAX_SINGLE_POSITION_RATIO = 0.30
+MAX_ADD_STEP_RATIO = 0.10
 
 
 def decide_position(
@@ -368,7 +368,7 @@ def _position_decision_from_short_trend(
                 reasons = [reason for reason in reasons if "可按阶梯方式加仓" not in reason]
                 warnings.append("加仓条件未完全满足，需继续观察 MA5/MA10、ATR 和 BIAS 后再执行")
             else:
-                adjust_ratio = min(max(gap, 0.0), 0.20)
+                adjust_ratio = min(max(gap, 0.0), MAX_ADD_STEP_RATIO)
                 new_ratio = min(current_ratio + adjust_ratio, target_ratio)
         elif action in {"REDUCE", "TREND_REVIEW", "EXIT_TREND_POSITION"}:
             max_reduce_step = 0.50 if serious_risk else 0.30
@@ -472,9 +472,8 @@ def _apply_portfolio_caps(target_ratio: float, current_ratio: float, portfolio: 
     if total_ratio >= MAX_TOTAL_POSITION_RATIO and capped > current_ratio:
         warnings.append("组合总仓位已达到 80% 上限，必须至少保留 20% 现金，禁止新增加仓")
         capped = current_ratio
-    if category_ratio >= MAX_CATEGORY_POSITION_RATIO and capped > current_ratio:
-        warnings.append("同类 ETF 仓位已达到 15% 上限，禁止继续提高该方向仓位")
-        capped = current_ratio
+    if category_ratio > 0 and capped > current_ratio:
+        warnings.append(f"同类 ETF 仓位约 {category_ratio:.1%}，仅作集中度提示，不作为趋势策略的硬性加仓上限")
     return capped
 
 
@@ -482,8 +481,7 @@ def _portfolio_blocks_add(portfolio: dict[str, Any]) -> bool:
     if portfolio.get("position_pct_confidence") == "low":
         return False
     total_ratio = (_num_or_none(portfolio.get("total_position_pct")) or 0.0) / 100.0
-    category_ratio = (_num_or_none(portfolio.get("category_pct")) or 0.0) / 100.0
-    return total_ratio >= MAX_TOTAL_POSITION_RATIO or category_ratio >= MAX_CATEGORY_POSITION_RATIO
+    return total_ratio >= MAX_TOTAL_POSITION_RATIO
 
 
 def _has_high_risk(trend: dict[str, Any]) -> bool:
@@ -536,6 +534,7 @@ def _can_add_by_trend(market: MarketSnapshot, trend: dict[str, Any]) -> bool:
     close = _num_or_none(market.last_price)
     ma5 = _num_or_none(market.ma5)
     ma10 = _num_or_none(market.ma10)
+    vol_ratio_1_5 = _num_or_none((trend.get("indicators") or {}).get("vol_ratio_1_5")) or _num_or_none(market.vol_ratio_1_5)
     tags = set(trend.get("tags") or [])
     return bool(
         score >= 75
@@ -543,7 +542,10 @@ def _can_add_by_trend(market: MarketSnapshot, trend: dict[str, Any]) -> bool:
         and ma5 is not None
         and ma10 is not None
         and close > ma5 > ma10
+        and vol_ratio_1_5 is not None
+        and vol_ratio_1_5 >= 1.1
         and "放量急涨" not in tags
+        and "短线量能不足" not in tags
         and "RSI短线过热" not in tags
         and "RSI短线偏热" not in tags
         and "BIAS严重偏离MA5" not in tags

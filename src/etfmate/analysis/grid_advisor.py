@@ -144,7 +144,7 @@ def advise_grid(
             reasons.append("操作建议偏减仓或风险等级偏高，网格买入侧按保守仓位执行")
         elif position_action in {"ADD", "OPEN", "LIGHT_OPEN", "HOLD_OR_ADD"} and trend_score >= 75 and position_risk_level == "LOW":
             if action == "维持":
-                reasons.append("操作建议偏加仓/建仓且趋势评分不低于75，网格可维持运行，但仍按仓位上限控制买入侧")
+                reasons.append("操作建议偏加仓/建仓且趋势评分不低于75，网格可维持运行，但仍按总仓位、单只上限和加仓确认控制买入侧")
 
     if layer_payload:
         confidence = _num_or_zero(layer_payload.get("confidence"))
@@ -160,6 +160,13 @@ def advise_grid(
                 suggested_buy_qty = _round_qty(suggested_buy_qty * 0.5)
         elif total_score >= 2 and action in {"降低买入侧", "维持网格并风险提示"}:
             reasons.append("多层证据未完全转弱，降低买入侧后仍保留卖出侧纪律并观察修复")
+
+    if trend_profit_continuation and grid:
+        if grid.sell_rise_pct and suggested_sell_rise is not None and suggested_sell_rise < grid.sell_rise_pct:
+            suggested_sell_rise = grid.sell_rise_pct
+            reasons.append("趋势健康且已有盈利，卖出触发不因 ATR 公式收紧，沿用现有卖出上升幅度以保留盈利空间")
+        if suggested_sell_qty is not None:
+            suggested_sell_qty = min(suggested_sell_qty, base_lot_qty)
 
     grid_purpose = _grid_purpose(action, position, position_action, rule_action, strong_positive, hard_weak, trend_profit_continuation)
     guardrails = _strategy_guardrails(
@@ -285,7 +292,7 @@ def _strategy_guardrails(
     guardrails = ["条件单用于替代盯盘，只给当前时点一套可执行参数"]
     confidence = _num_or_zero(layer_payload.get("confidence")) if layer_payload else 0
     if confidence < 60:
-        guardrails.append("七层证据不足，默认保守，不主动扩大买入侧")
+        guardrails.append("七层证据未完整接入，仅作复核提示，不单独压低强趋势买入")
     if risk_level == "HIGH" or trend_score < 60 or "降低" in action or "暂停" in action:
         guardrails.append("趋势或风险未确认，宁可少赚，不用网格扩大不确定仓位")
     if position and position.pnl_pct > 0:
@@ -302,7 +309,7 @@ def _strategy_guardrails(
 
 def _should_win_rate_cut_buy(guardrails: list[str]) -> bool:
     text = "；".join(guardrails)
-    return any(token in text for token in ("证据不足", "风险未确认", "仓位偏高"))
+    return any(token in text for token in ("风险未确认", "仓位偏高"))
 
 
 def _should_win_rate_boost_sell(

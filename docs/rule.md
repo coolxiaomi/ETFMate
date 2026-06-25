@@ -563,6 +563,7 @@ def decide_rule(etf, position, portfolio):
   "minAmountAvg20Industry": 80000000,
   "minAmountAvg20Theme": 50000000,
   "maxSinglePosition": 0.30,
+  "maxTotalPosition": 0.80,
   "initialOpenRatioStrong": 0.15,
   "initialOpenRatioUptrend": 0.10,
   "minAdjustRatio": 0.05,
@@ -575,6 +576,16 @@ def decide_rule(etf, position, portfolio):
 }
 ```
 
+组合约束说明：
+
+```text
+1. ETFMate 面向趋势型 ETF 交易，行业/主题 ETF 是主要持仓方向；
+2. 同类 ETF 占比只作为集中度提示，不阻断 ADD / OPEN / LIGHT_OPEN。
+3. 同主题重合只作为成分、流动性、费率和跟踪误差的人工筛选提示，不作为负分或自动降仓理由。
+4. 只有组合总仓位达到 80% 现金纪律或单只 ETF 达到 30% 上限时，才压缩新增买入目标。
+5. 单次加仓最多 10% 组合仓位；若量能确认不足，即使趋势评分很高，也先输出持有待加仓确认。
+```
+
 ---
 
 ## 16. 回归测试建议
@@ -584,7 +595,7 @@ def decide_rule(etf, position, portfolio):
 ```text
 1. score.md 不输出 ATR_RISK_DEDUCT。
 2. rule.md 不再调用 calc_trend_score / momentumScore / riskScore / totalScore。
-3. ShortTrendScore >= 85 且无追高提示，未持仓输出 OPEN，但目标仓位不超过 15%。
+3. ShortTrendScore >= 85 且无追高提示，未持仓输出 OPEN，但首笔目标仓位不超过 15%。
 4. ShortTrendScore >= 75 且无追高提示，未持仓输出 LIGHT_OPEN。
 5. ShortTrendScore < 75，未持仓输出 WATCH。
 6. 已持仓时，targetPositionRatio > currentPositionRatio + 5%，输出 ADD。
@@ -593,6 +604,8 @@ def decide_rule(etf, position, portfolio):
 9. 出现 RSI短线过热 / BIAS严重偏离MA5 / 接近布林上轨 / 放量急涨时，目标仓位降档。
 10. BOLL_POSITION >= 0.90、RSI6 >= 70、BIAS12 >= 6%、BIAS24 >= 10% 时必须生成追高风险标签；未持仓不得输出普通建仓，已有持仓不得继续扩大买入侧。
 11. ATR 放大只能影响 grid.md，不能反向修改 ShortTrendScore 或 TrendLevel。
+12. 组合总仓位 80% 仍是现金纪律硬约束。
+13. 已持仓强趋势但短线量能不足时，不直接加仓，输出持有待加仓确认。
 ```
 
 ---

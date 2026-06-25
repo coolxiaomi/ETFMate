@@ -9,6 +9,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from etfmate.analysis import rule_engine
 from etfmate.analysis.grid_advisor import advise_grid
+from etfmate.analysis.layered_context import build_layered_context
+from etfmate.analysis.recommendation import recommend
 from etfmate.analysis.trade_reviewer import review_trade_periods
 from etfmate.browser.ths_account import extract_watchlist
 from etfmate.cli import _position as _cli_position
@@ -180,6 +182,148 @@ def test_portfolio_limit_blocks_new_position(monkeypatch):
 
     assert decision["position_action"] == "WATCH"
     assert decision["action"] == "观察"
+
+
+def test_category_concentration_does_not_block_theme_trend_entry(monkeypatch):
+    monkeypatch.setattr(
+        rule_engine,
+        "_trend_score",
+        lambda market: {
+            "score": 90,
+            "name": "短线强趋势",
+            "level": "STRONG_TREND",
+            "tags": [],
+            "scores": {},
+            "indicators": {},
+            "data_sufficient": True,
+            "evidence": ["测试强趋势"],
+        },
+    )
+    existing = [
+        Position("159001", "主题ETF甲", 1000, 1, 1, 1000, 0, 0, position_pct=20, position_pct_source="ths_account_total_asset"),
+        Position("159002", "主题ETF乙", 1000, 1, 1, 1000, 0, 0, position_pct=15, position_pct_source="ths_account_total_asset"),
+    ]
+
+    decision = rule_engine.decide_position(None, None, _market(), existing, [_market()])
+
+    assert decision["position_action"] == "OPEN"
+
+
+def test_strong_theme_holding_waits_for_volume_confirmation_without_category_cap():
+    position = Position(
+        "159326",
+        "电网设备ETF华夏",
+        1500,
+        1.633,
+        2.216,
+        3324,
+        874.96,
+        35.72,
+        position_pct=4.19,
+        position_pct_source="ths_account_total_asset",
+    )
+    existing = [
+        position,
+        Position("159141", "人工智能ETF", 3500, 1.333, 1.524, 5334, 667, 14.3, position_pct=6.72, position_pct_source="ths_account_total_asset"),
+        Position("562800", "稀有金属ETF", 5000, 1.125, 1.172, 5860, 236, 4.2, position_pct=7.38, position_pct_source="ths_account_total_asset"),
+        Position("560280", "工程机械ETF", 3900, 1.713, 1.564, 6099.6, -581, -8.71, position_pct=7.69, position_pct_source="ths_account_total_asset"),
+        Position("159516", "半导体设备ETF", 1000, 1.434, 1.702, 1702, 268, 18.71, position_pct=2.14, position_pct_source="ths_account_total_asset"),
+        Position("515880", "通信ETF", 1100, 1.471, 1.883, 2071.3, 452, 27.99, position_pct=2.61, position_pct_source="ths_account_total_asset"),
+    ]
+    market = MarketSnapshot(
+        code="159326",
+        name="电网设备ETF华夏",
+        last_price=2.216,
+        pct_chg=1.23,
+        volume=4_341_732,
+        amount=956_470_000,
+        ma5=2.2008,
+        ma5_slope_3=0.0238,
+        ma10=2.1326,
+        ma20=2.09625,
+        ma60=2.0197,
+        boll_position=0.8946,
+        bias5_ratio=0.0069,
+        bias12=4.62,
+        bias24=5.95,
+        rsi6=68.2,
+        vol_ratio_1_5=0.723,
+        vol_ratio_5_20=0.923,
+        kline_days=261,
+    )
+
+    decision = rule_engine.decide_position(position, None, market, existing, [market])
+
+    assert decision["trend_score"] == 89
+    assert decision["position_action"] == "HOLD_WAIT_ADD"
+    assert decision["target_position_pct"] == 30
+    assert decision["adjust_pct"] == 0 
+
+
+def test_same_theme_overlap_is_neutral_screening_signal_not_negative_score():
+    position = Position("159516", "半导体设备ETF国泰", 1000, 1.4, 1.7, 1700, 300, 20, position_pct=2)
+    peer = Position("588200", "科创芯片ETF嘉实", 1000, 1.0, 1.0, 1000, 0, 0, position_pct=1)
+    market = MarketSnapshot(
+        code="159516",
+        name="半导体设备ETF国泰",
+        last_price=1.7,
+        pct_chg=1,
+        volume=1_000_000,
+        amount=100_000_000,
+        ma20=1.6,
+        ma60=1.5,
+        kline_days=240,
+        data_quality="quote:tencent;kline:tencent",
+    )
+
+    context = build_layered_context(position, None, market, [position, peer])
+    signal = next(layer for layer in context.layers if layer.key == "signal")
+
+    assert signal.score == 0
+    assert "待筛选" in signal.conclusion
+    assert context.total_score >= 0
+
+
+def test_low_layer_confidence_only_adds_review_note_without_downgrading_strong_trend():
+    position = Position(
+        "159326",
+        "电网设备ETF华夏",
+        1500,
+        1.633,
+        2.216,
+        3324,
+        874.96,
+        35.72,
+        position_pct=4.19,
+        position_pct_source="ths_account_total_asset",
+    )
+    market = MarketSnapshot(
+        code="159326",
+        name="电网设备ETF华夏",
+        last_price=2.216,
+        pct_chg=1.23,
+        volume=4_341_732,
+        amount=956_470_000,
+        ma5=2.2008,
+        ma5_slope_3=0.0238,
+        ma10=2.1326,
+        ma20=2.09625,
+        ma60=2.0197,
+        boll_position=0.8946,
+        bias5_ratio=0.0069,
+        bias12=4.62,
+        bias24=5.95,
+        rsi6=68.2,
+        vol_ratio_1_5=0.723,
+        vol_ratio_5_20=0.923,
+        kline_days=261,
+    )
+
+    item = recommend(position, None, market, [position], [market], layered_context={"confidence": 22, "total_score": 1})
+
+    assert item["action"] == "持有待加仓确认"
+    assert any("仅作复核提示" in risk for risk in item["risks"])
+    assert not any("不适合扩大仓位" in risk or "强动作降级" in risk for risk in item["risks"])
 
 
 def test_fallback_holding_pct_does_not_trigger_portfolio_hard_cap(monkeypatch):
@@ -435,6 +579,62 @@ def test_profitable_strong_trend_grid_keeps_profit_room():
     assert advice["grid_purpose"] == "持仓网格"
     assert advice["suggested_sell_quantity"] == 200
     assert any("不因浮盈提前减仓" in reason or "继续盈利空间" in reason for reason in advice["reasons"])
+
+
+def test_profitable_strong_trend_grid_keeps_existing_sell_rise_when_bias_not_extreme():
+    grid = GridConfig(
+        code="159326",
+        name="电网设备ETF华夏",
+        enabled=True,
+        base_price=2.172,
+        order_quantity=1000,
+        buy_quantity=1000,
+        sell_quantity=1000,
+        buy_fall_pct=2.15,
+        buy_rebound_pct=0.15,
+        sell_rise_pct=5.15,
+        sell_pullback_pct=0.15,
+        min_base_quantity=1000,
+        max_position_quantity=10000,
+    )
+    position = Position("159326", "电网设备ETF华夏", 1500, 1.633, 2.216, 3324, 874.96, 35.72, position_pct=4.19)
+    market = MarketSnapshot(
+        code="159326",
+        name="电网设备ETF华夏",
+        last_price=2.216,
+        pct_chg=1.23,
+        volume=4_341_732,
+        amount=956_470_000,
+        ma20=2.09625,
+        ma60=2.0197,
+        boll_upper=2.248,
+        boll_mid=2.09625,
+        boll_position=0.8946,
+        bias6=1.16,
+        atr14_pct=3.2007,
+        kline_days=261,
+    )
+
+    advice = advise_grid(
+        grid,
+        market,
+        position,
+        layered_context={"confidence": 22, "total_score": 1},
+        rule_decision={
+            "action": "持有待加仓确认",
+            "position_action": "HOLD_WAIT_ADD",
+            "trend_score": 89,
+            "risk_level": "LOW",
+            "target_position_ratio": 0.30,
+        },
+    )
+
+    assert advice["grid_purpose"] == "加仓网格"
+    assert advice["suggested_sell_rise_pct"] == 5.15
+    assert advice["suggested_sell_quantity"] == 1000
+    assert advice["suggested_buy_quantity"] == 1000
+    assert any("卖出触发不因 ATR 公式收紧" in reason for reason in advice["reasons"])
+    assert not any("胜率优先护栏触发" in reason for reason in advice["reasons"])
 
 
 def test_weak_loss_grid_does_not_keep_normal_buy_side():

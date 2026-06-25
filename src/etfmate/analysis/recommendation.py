@@ -71,11 +71,8 @@ def recommend(
     if layer_payload:
         confidence = _num_or_zero(layer_payload.get("confidence"))
         total_score = _num_or_zero(layer_payload.get("total_score"))
-        if confidence < 45 and action in {"建仓", "加仓"}:
-            action = "轻仓建仓" if not position else "持有观察"
-            risks.append("七层证据置信度不足，强动作降级为保守仓位建议")
-        elif confidence < 45 and action in {"轻仓建仓", "持有或加仓", "持有待加仓确认", "持有观察"}:
-            risks.append("七层证据置信度不足，只适合小额试探，不适合扩大仓位")
+        if confidence < 45:
+            risks.append("七层证据未完整接入，仅作复核提示，不单独压低强趋势动作")
         if total_score <= -2 and action in {"建仓", "轻仓建仓", "加仓", "持有或加仓", "持有待加仓确认", "持有观察"}:
             action = "观察" if not position else "持有"
             risks.append("多层证据偏弱，暂不把短线趋势信号直接解释为加仓信号")
@@ -357,7 +354,7 @@ def _overlap_note(position: Position | None, positions: list[Position]) -> str |
     if not peers:
         return None
     names = "、".join(f"{item.code} {item.name}" for item in peers[:3])
-    return f"可能与同主题 ETF 持仓重合较高：{names}；建议保留流动性/费率/跟踪误差更优的一只，另一只逐步降权或只保留观察仓"
+    return f"可能与同主题 ETF 持仓重合较高：{names}；仅作持仓重合提示，需结合成分、流动性、费率和跟踪误差人工筛选，不自动触发降仓"
 
 
 def _theme_key(name: str) -> str | None:
