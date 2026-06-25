@@ -283,6 +283,50 @@ def test_profitable_upper_band_grid_does_not_move_base_to_current_price():
     assert advice["suggested_sell_quantity"] >= advice["suggested_buy_quantity"]
 
 
+def test_profitable_strong_trend_grid_keeps_profit_room():
+    grid = GridConfig(
+        code="159999",
+        name="测试ETF",
+        enabled=True,
+        base_price=1.0,
+        order_quantity=200,
+        buy_fall_pct=3,
+        sell_rise_pct=3,
+    )
+    position = Position("159999", "测试ETF", 1000, 0.95, 1.08, 1080, 130, 13.68, position_pct=3)
+    market = MarketSnapshot(
+        code="159999",
+        name="测试ETF",
+        last_price=1.08,
+        pct_chg=1.0,
+        volume=1000000,
+        amount=100000000,
+        boll_upper=1.1,
+        boll_mid=1.02,
+        ma20=1.03,
+        ma60=1.0,
+        bias6=3.0,
+        atr14_pct=2.0,
+        kline_days=240,
+    )
+
+    advice = advise_grid(
+        grid,
+        market,
+        position,
+        rule_decision={
+            "action": "持有",
+            "position_action": "HOLD",
+            "trend_score": 86,
+            "risk_level": "LOW",
+        },
+    )
+
+    assert advice["grid_purpose"] == "持仓网格"
+    assert advice["suggested_sell_quantity"] == 200
+    assert any("不因浮盈提前减仓" in reason or "继续盈利空间" in reason for reason in advice["reasons"])
+
+
 def test_weak_loss_grid_does_not_keep_normal_buy_side():
     grid = GridConfig(
         code="159999",

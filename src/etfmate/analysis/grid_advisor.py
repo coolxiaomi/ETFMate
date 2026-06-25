@@ -5,7 +5,7 @@ from typing import Any
 from etfmate.analysis.layered_context import LayeredContext, normalize_context
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position
 
-STRATEGY_PROFILE = "条件单代替盯盘；胜率优先；不追求吃完整段行情；小盈利分批止盈；不深研标的时默认保守"
+STRATEGY_PROFILE = "条件单代替盯盘；胜率优先；不追求吃完整段行情；盈利看趋势管理；不深研标的时默认保守"
 
 
 def advise_grid(
@@ -54,8 +54,11 @@ def advise_grid(
     low_zone = bool(market.boll_lower and market.last_price <= market.boll_lower * 1.08 and (market.bias6 or 0) < -1)
     hard_reduce_buy_side = bool(grid and grid.enabled and hard_weak and (high_position or deep_loss))
     reduce_buy_side = bool(grid and grid.enabled and (soft_weak or hard_reduce_buy_side))
+    trend_profit_continuation = _is_profit_trend_continuation(
+        position, trend_score, position_risk_level, hard_weak, soft_weak, position_action, rule_action
+    )
 
-    base_eval = _evaluate_base_price(grid, market, position, hard_weak, strong_positive)
+    base_eval = _evaluate_base_price(grid, market, position, hard_weak, strong_positive, trend_profit_continuation)
     reasons.extend(base_eval["reasons"])
 
     if current_step and market.atr14_pct and not hard_reduce_buy_side:
@@ -87,10 +90,16 @@ def advise_grid(
         suggested_sell_qty = base_lot_qty
     elif strong_positive:
         suggested_buy_qty = _round_qty(base_lot_qty * 0.5)
-        suggested_sell_qty = _round_qty(base_lot_qty * 1.5)
-        suggested_sell_rise = _round_pct(_clamp((market.atr14_pct or suggested_sell_rise) * 0.6, 2.0, suggested_sell_rise))
-        suggested_sell_pullback = _round_pct(_clamp((market.atr14_pct or suggested_sell_pullback) * 0.08, 0.15, suggested_sell_pullback or 0.6))
-        reasons.append("价格接近 BOLL 上轨且短线正偏离，卖出侧应更积极")
+        if trend_profit_continuation:
+            suggested_sell_qty = base_lot_qty
+            if grid and grid.sell_rise_pct:
+                suggested_sell_rise = max(suggested_sell_rise or grid.sell_rise_pct, grid.sell_rise_pct)
+            reasons.append("已有盈利但趋势评分较高且风险等级低，不因浮盈提前减仓；买入侧不追高，卖出侧保留盈利空间")
+        else:
+            suggested_sell_qty = _round_qty(base_lot_qty * 1.5)
+            suggested_sell_rise = _round_pct(_clamp((market.atr14_pct or suggested_sell_rise) * 0.6, 2.0, suggested_sell_rise))
+            suggested_sell_pullback = _round_pct(_clamp((market.atr14_pct or suggested_sell_pullback) * 0.08, 0.15, suggested_sell_pullback or 0.6))
+            reasons.append("价格接近 BOLL 上轨且短线正偏离，但趋势或风险确认不足，卖出侧应更积极保护利润")
     elif low_zone:
         suggested_buy_qty = base_lot_qty
         suggested_sell_qty = base_lot_qty
@@ -153,16 +162,18 @@ def advise_grid(
         elif total_score >= 2 and action in {"降低买入侧", "维持网格并风险提示"}:
             reasons.append("多层证据未完全转弱，降低买入侧后仍保留卖出侧纪律并观察修复")
 
-    grid_purpose = _grid_purpose(action, position, position_action, rule_action, strong_positive, hard_weak)
-    guardrails = _strategy_guardrails(position, market, layer_payload, position_risk_level, trend_score, action, has_existing_grid)
+    grid_purpose = _grid_purpose(action, position, position_action, rule_action, strong_positive, hard_weak, trend_profit_continuation)
+    guardrails = _strategy_guardrails(
+        position, market, layer_payload, position_risk_level, trend_score, action, has_existing_grid, trend_profit_continuation
+    )
     if _should_win_rate_cut_buy(guardrails):
         old_buy_qty = suggested_buy_qty
         suggested_buy_qty = _round_qty((suggested_buy_qty or base_lot_qty) * 0.5) if suggested_buy_qty is not None else None
         if old_buy_qty != suggested_buy_qty:
             reasons.append("胜率优先护栏触发，买入侧再降一档，宁可少赚也不扩大不确定仓位")
-    if _should_win_rate_boost_sell(position, strong_positive, grid_purpose):
+    if _should_win_rate_boost_sell(position, strong_positive, grid_purpose, trend_profit_continuation):
         suggested_sell_qty = max(suggested_sell_qty or base_lot_qty, _round_qty(base_lot_qty * 1.5))
-        reasons.append("小盈利分批止盈护栏触发，卖出侧保持更积极，不等待趋势完全破坏")
+        reasons.append("盈利保护护栏触发且趋势/风险确认不足，卖出侧保持更积极，不等待趋势完全破坏")
     confirmation_pct = _confirmation_pct(base_eval.get("suggested_base") or (grid.base_price if grid else None) or market.last_price)
     suggested_buy_rebound = confirmation_pct
     suggested_sell_pullback = confirmation_pct
@@ -240,12 +251,20 @@ def _grid_applicable(has_existing_grid: bool, position: Position | None, rule_ac
     return rule_action in {"建仓", "轻仓建仓"} or position_action in {"OPEN", "LIGHT_OPEN"}
 
 
-def _grid_purpose(action: str, position: Position | None, position_action: str, rule_action: str, strong_positive: bool, hard_weak: bool) -> str:
+def _grid_purpose(
+    action: str,
+    position: Position | None,
+    position_action: str,
+    rule_action: str,
+    strong_positive: bool,
+    hard_weak: bool,
+    trend_profit_continuation: bool,
+) -> str:
     if not position:
         return "建仓网格"
     if action in {"只保留卖出", "暂停买入侧"} or position_action in {"REDUCE", "RISK_REVIEW", "EXIT_SHORT_TERM"} or rule_action in {"减仓", "风控复核", "退出短线仓位"}:
         return "止盈/退出网格"
-    if strong_positive and position.pnl_pct > 0:
+    if strong_positive and position.pnl_pct > 0 and not trend_profit_continuation:
         return "止盈网格"
     if hard_weak:
         return "防守网格"
@@ -262,6 +281,7 @@ def _strategy_guardrails(
     trend_score: float,
     action: str,
     has_existing_grid: bool,
+    trend_profit_continuation: bool,
 ) -> list[str]:
     guardrails = ["条件单用于替代盯盘，只给当前时点一套可执行参数"]
     confidence = _num_or_zero(layer_payload.get("confidence")) if layer_payload else 0
@@ -270,7 +290,10 @@ def _strategy_guardrails(
     if risk_level == "HIGH" or trend_score < 60 or "降低" in action or "暂停" in action:
         guardrails.append("趋势或风险未确认，宁可少赚，不用网格扩大不确定仓位")
     if position and position.pnl_pct > 0:
-        guardrails.append("已有盈利时优先分批兑现，不默认等到趋势完全破坏")
+        if trend_profit_continuation:
+            guardrails.append("已有盈利但趋势健康，浮盈不是卖出充分条件，网格保留继续盈利空间")
+        else:
+            guardrails.append("已有盈利且趋势/风险未完全确认时，优先保留分批兑现纪律")
     if position and (position.position_pct or 0) >= 5:
         guardrails.append("仓位偏高时不提高买入侧，优先控制回撤和重复暴露")
     if not has_existing_grid and not position:
@@ -283,11 +306,25 @@ def _should_win_rate_cut_buy(guardrails: list[str]) -> bool:
     return any(token in text for token in ("证据不足", "风险未确认", "仓位偏高"))
 
 
-def _should_win_rate_boost_sell(position: Position | None, strong_positive: bool, grid_purpose: str) -> bool:
+def _should_win_rate_boost_sell(
+    position: Position | None,
+    strong_positive: bool,
+    grid_purpose: str,
+    trend_profit_continuation: bool,
+) -> bool:
+    if trend_profit_continuation:
+        return False
     return bool(position and position.pnl_pct >= 3 and (strong_positive or grid_purpose in {"止盈网格", "止盈/退出网格"}))
 
 
-def _evaluate_base_price(grid: GridConfig | None, market: MarketSnapshot, position: Position | None, hard_weak: bool, strong_positive: bool) -> dict[str, Any]:
+def _evaluate_base_price(
+    grid: GridConfig | None,
+    market: MarketSnapshot,
+    position: Position | None,
+    hard_weak: bool,
+    strong_positive: bool,
+    trend_profit_continuation: bool,
+) -> dict[str, Any]:
     if not grid or not grid.base_price:
         suggested = _new_base_price(market, position)
         return {
@@ -304,11 +341,14 @@ def _evaluate_base_price(grid: GridConfig | None, market: MarketSnapshot, positi
     outside_range = bool((grid.lower_price and current < grid.lower_price) or (grid.upper_price and current > grid.upper_price))
     reasons: list[str] = []
     if strong_positive and position and position.pnl_pct > 0 and base < current and deviation_pct <= max(3 * atr_pct, 10.0):
-        reasons.append("已有盈利且价格接近上轨，基准价不轻易上移，优先保留分批止盈纪律")
+        if trend_profit_continuation:
+            reasons.append("已有盈利且趋势健康，基准价不追高上移；保留现有卖出纪律和继续盈利空间")
+        else:
+            reasons.append("已有盈利且价格接近上轨但趋势/风险确认不足，基准价不轻易上移，优先保留分批止盈纪律")
         return {
             "status": "维持现有基准",
             "suggested_base": _round_price(base),
-            "reason": "盈利持仓优先保留止盈纪律，现有基准仍可用",
+            "reason": "盈利持仓结合趋势管理，现有基准仍可用",
             "reasons": reasons,
         }
     if deviation_pct > threshold or outside_range:
@@ -352,6 +392,28 @@ def _reference_price(market: MarketSnapshot, prefer_upper: bool = False) -> floa
     if not refs:
         return None
     return max(refs) if prefer_upper else sum(refs) / len(refs)
+
+
+def _is_profit_trend_continuation(
+    position: Position | None,
+    trend_score: float,
+    risk_level: str,
+    hard_weak: bool,
+    soft_weak: bool,
+    position_action: str,
+    rule_action: str,
+) -> bool:
+    if not position or position.pnl_pct <= 0:
+        return False
+    if trend_score < 75 or risk_level != "LOW":
+        return False
+    if hard_weak or soft_weak:
+        return False
+    if position_action in {"REDUCE", "RISK_REVIEW", "EXIT_SHORT_TERM"}:
+        return False
+    if rule_action in {"减仓", "风控复核", "退出短线仓位"}:
+        return False
+    return True
 
 
 def _suggest_min_base_quantity(grid: GridConfig | None, position: Position | None) -> float:
