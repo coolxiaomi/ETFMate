@@ -362,8 +362,8 @@ rule.md 不再直接写买入、加仓、卖出、清仓规则，避免和 actio
 ```text
 1. FORBID
 2. EXIT_TREND_POSITION
-3. TREND_REVIEW
-4. REDUCE
+3. REDUCE
+4. TREND_REVIEW
 5. ADD
 6. OPEN
 7. LIGHT_OPEN
@@ -376,6 +376,7 @@ rule.md 不再直接写买入、加仓、卖出、清仓规则，避免和 actio
 ```text
 硬过滤优先于趋势评分。
 趋势明显转弱优先于加仓和建仓。
+当目标仓位为 0 且当前仍有持仓时，主动作必须优先显示为 REDUCE / EXIT_TREND_POSITION，趋势复核只能作为辅助说明。
 未持仓标的即使评分高，也只允许轻仓试错，不输出满仓或重仓建议。
 ```
 
@@ -427,15 +428,13 @@ AI 复核输入
 趋势评分
 趋势等级
 趋势标签
-可用数量
-是否可立即减仓
 ```
 
-如果 `availableQuantity = 0`：
+当前投资账本不提供可卖数量列：
 
 ```text
-不输出可立即执行的卖出数量
-只输出趋势复核或次日观察提示
+不按 T+1 或可用数量阻断减仓/退出短线仓提示。
+不得输出“可用数量为0”“今日不可卖”等伪护栏。
 ```
 
 ---
@@ -592,7 +591,8 @@ def decide_rule(etf, position, portfolio):
 7. 已持仓时，targetPositionRatio < currentPositionRatio - 5%，输出 REDUCE。
 8. ShortTrendScore < 45 且 close < MA5 且 MA5 < MA10，输出 EXIT_TREND_POSITION。
 9. 出现 RSI短线过热 / BIAS严重偏离MA5 / 接近布林上轨 / 放量急涨时，目标仓位降档。
-10. ATR 放大只能影响 grid.md，不能反向修改 ShortTrendScore 或 TrendLevel。
+10. BOLL_POSITION >= 0.90、RSI6 >= 70、BIAS12 >= 6%、BIAS24 >= 10% 时必须生成追高风险标签；未持仓不得输出普通建仓，已有持仓不得继续扩大买入侧。
+11. ATR 放大只能影响 grid.md，不能反向修改 ShortTrendScore 或 TrendLevel。
 ```
 
 ---

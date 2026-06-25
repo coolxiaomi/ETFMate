@@ -579,11 +579,19 @@ tags = []
 ```text
 if RSI6 > 85:
     add "RSI短线过热"
+else if RSI6 >= 70:
+    add "RSI短线偏热"
 
 if BIAS5 > 0.06:
     add "BIAS严重偏离MA5"
 
-if BOLL_POSITION > 0.95:
+if BIAS12 >= 6%:
+    add "BIAS12明显正乖离"
+
+if BIAS24 >= 10%:
+    add "BIAS24严重正乖离"
+
+if BOLL_POSITION >= 0.90:
     add "接近或突破布林上轨"
 
 if VOL_RATIO_1_5 >= 1.5 and BIAS5 > 0.04:
@@ -850,3 +858,4 @@ FinalScore = 0.7 * MomentumScore + 0.3 * ShortTrendScore
 5. ATR 应迁移到网格建议或独立波动模块。
 6. 趋势等级不再使用“强势进攻区”，改为“短线强趋势”。
 7. 系统输出应是分析与风险提示，不应输出绝对买卖指令。
+8. 追高护栏必须读取多周期位置：BOLL_POSITION >= 0.90、RSI6 >= 70、BIAS12 >= 6%、BIAS24 >= 10% 都应生成风险标签；其中 BIAS24 严重正乖离应进入高风险。

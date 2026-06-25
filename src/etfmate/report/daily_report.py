@@ -116,6 +116,8 @@ def _etf_view(item: dict) -> dict[str, Any]:
     if holding_pct is None and rec:
         holding_pct = _float_or_none(rec.get("position_pct"))
     pnl_pct = _float_or_none(rec.get("pnl_pct")) if rec else None
+    risk_level = _risk_level_code(rec)
+    risk_reasons = _risk_nav_reasons(rec) if rec else []
     return {
         "id": f"etf-{_anchor(code)}",
         "code": code,
@@ -133,6 +135,10 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "trend_score": trend_score,
         "trend_score_text": "-" if trend_score is None else f"{trend_score:.0f}",
         "trend_width": f"{max(4, min(100, trend_score or 0)):.1f}",
+        "risk_level": risk_level,
+        "risk_width": _risk_width(risk_level),
+        "risk_text": _risk_nav_text(risk_level, rec, risk_reasons),
+        "risk_reasons": risk_reasons,
         "nav_action": nav["action"],
         "nav_action_class": nav["action_class"],
         "nav_heat": nav["heat"],
@@ -353,6 +359,7 @@ def _nav_dashboard(etfs: list[dict[str, Any]]) -> dict[str, Any]:
         "holding": _holding_pie(etfs),
         "pnl": _pnl_dashboard(etfs),
         "grid_groups": _grid_groups(etfs),
+        "risk_summary": _risk_summary(etfs),
         "risk_items": _risk_items(etfs),
     }
 
@@ -428,7 +435,27 @@ def _grid_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _risk_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return []
+    high_risk = [item for item in etfs if item.get("risk_level") == "HIGH"]
+    return sorted(
+        high_risk,
+        key=lambda item: (
+            0 if item.get("is_held") else 1,
+            -_sort_number(item.get("position_pct_value")),
+            -_sort_number(item.get("trend_score")),
+            str(item.get("code") or ""),
+        ),
+    )
+
+
+def _risk_summary(etfs: list[dict[str, Any]]) -> dict[str, Any]:
+    high = [item for item in etfs if item.get("risk_level") == "HIGH"]
+    high_held = [item for item in high if item.get("is_held")]
+    high_position = sum(item.get("position_pct_value") or 0 for item in high_held)
+    return {
+        "high_count": len(high),
+        "high_held_count": len(high_held),
+        "high_position_pct": f"{high_position:.2f}%",
+    }
 
 
 def _trend_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1398,6 +1425,47 @@ def _position_action_text(value: Any) -> str:
 def _risk_level_text(value: Any) -> str:
     mapping = {"HIGH": "高", "MEDIUM": "中", "LOW": "低"}
     return mapping.get(str(value or ""), _cell(value))
+
+
+def _risk_level_code(item: dict | None) -> str:
+    if not item:
+        return ""
+    rule = item.get("rule_decision") or {}
+    if isinstance(rule, dict) and rule.get("risk_level"):
+        return str(rule.get("risk_level") or "")
+    return str(item.get("position_risk_level") or "")
+
+
+def _risk_width(value: Any) -> str:
+    mapping = {"HIGH": "100", "MEDIUM": "62", "LOW": "28"}
+    return mapping.get(str(value or ""), "10")
+
+
+def _risk_nav_text(risk_level: Any, item: dict | None, risks: list[str]) -> str:
+    if not item:
+        return "-"
+    parts = [f"风险{_risk_level_text(risk_level)}"]
+    if item.get("quantity") is not None:
+        parts.append(f"资金仓 {_pct(item.get('position_pct'))}")
+    else:
+        parts.append("未持仓")
+    action = item.get("action")
+    if action:
+        parts.append(_display_action(str(action)))
+    if risks:
+        parts.append("；".join(risks[:2]))
+    return " · ".join(part for part in parts if part and part != "-")
+
+
+def _risk_nav_reasons(item: dict | None) -> list[str]:
+    if not item:
+        return []
+    generic = ("该建议仅为趋势评分结果", "不构成交易指令", "暂无明显新增风险")
+    risks = [risk for risk in _filtered_risks(item) if not any(token in risk for token in generic)]
+    rule = item.get("rule_decision") or {}
+    if isinstance(rule, dict):
+        risks.extend(str(tag) for tag in (rule.get("trend_tags") or []) if str(tag))
+    return list(dict.fromkeys(risks))[:3]
 
 
 def _position_pct_source_text(value: Any) -> str:

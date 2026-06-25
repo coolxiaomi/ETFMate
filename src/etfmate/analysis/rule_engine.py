@@ -131,7 +131,10 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
     vol_ratio_5_20 = _num_or_none(market.vol_ratio_5_20)
     boll_position = _num_or_none(market.boll_position)
     bias5 = _num_or_none(market.bias5_ratio)
+    bias12 = _num_or_none(market.bias12)
+    bias24 = _num_or_none(market.bias24)
     rsi6 = _num_or_none(market.rsi6)
+    rsi14 = _num_or_none(market.rsi14)
 
     core_values = [close, ma5, ma10, ma20, ma5_slope_3, vol_ratio_1_5, vol_ratio_5_20, boll_position, bias5, rsi6]
     data_sufficient = bool((market.kline_days or 0) >= 60 and all(value is not None for value in core_values))
@@ -210,9 +213,15 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
 
     if rsi6 is not None and rsi6 > 85:
         tags.append("RSI短线过热")
+    elif rsi6 is not None and rsi6 >= 70:
+        tags.append("RSI短线偏热")
     if bias5 is not None and bias5 > 0.06:
         tags.append("BIAS严重偏离MA5")
-    if boll_position is not None and boll_position > 0.95:
+    if bias12 is not None and bias12 >= 6:
+        tags.append("BIAS12明显正乖离")
+    if bias24 is not None and bias24 >= 10:
+        tags.append("BIAS24严重正乖离")
+    if boll_position is not None and boll_position >= 0.90:
         tags.append("接近或突破布林上轨")
     if vol_ratio_1_5 is not None and bias5 is not None and vol_ratio_1_5 >= 1.5 and bias5 > 0.04:
         tags.append("放量急涨")
@@ -241,7 +250,10 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
         "vol_ratio_5_20": vol_ratio_5_20,
         "boll_position": boll_position,
         "bias5": bias5,
+        "bias12": bias12,
+        "bias24": bias24,
         "rsi6": rsi6,
+        "rsi14": rsi14,
     }
     evidence = [
         f"短线趋势{name} {score:.0f}",
@@ -332,12 +344,12 @@ def _position_decision_from_short_trend(
         serious_risk = _is_serious_short_risk(score, market)
         reasons.append(f"基础目标仓位 {base_target:.0%}，风险调整后目标仓位 {target_ratio:.0%}")
 
-        if risk_level == "HIGH" and target_ratio <= 0 and current_ratio > 0:
-            action = "REDUCE" if current_ratio >= 0.05 else "TREND_REVIEW"
-            reasons.append("风险等级 HIGH 且目标仓位为 0，不允许被微调阈值降级为普通持有")
-        elif serious_risk:
+        if serious_risk:
             action = "EXIT_TREND_POSITION"
             reasons.append("短线评分低于45且价格跌破MA5、MA5低于MA10，触发退出短线仓位")
+        elif target_ratio <= 0 and current_ratio > 0:
+            action = "REDUCE"
+            reasons.append("目标仓位为 0 且仍有持仓，主动作必须明确为减仓/退出观察，趋势复核只作为辅助提示")
         elif abs(gap) < 0.05:
             action = "HOLD"
             reasons.append("目标仓位与当前仓位差小于5%，不做频繁微调")
@@ -476,7 +488,15 @@ def _portfolio_blocks_add(portfolio: dict[str, Any]) -> bool:
 
 def _has_high_risk(trend: dict[str, Any]) -> bool:
     tags = set(trend.get("tags") or [])
-    high_risk_tags = {"RSI短线过热", "BIAS严重偏离MA5", "放量急涨", "接近或突破布林上轨"}
+    high_risk_tags = {
+        "RSI短线过热",
+        "RSI短线偏热",
+        "BIAS严重偏离MA5",
+        "BIAS12明显正乖离",
+        "BIAS24严重正乖离",
+        "放量急涨",
+        "接近或突破布林上轨",
+    }
     return bool(tags & high_risk_tags)
 
 
@@ -485,11 +505,20 @@ def _no_high_risk(trend: dict[str, Any]) -> bool:
     indicators = trend.get("indicators") or {}
     rsi6 = _num_or_none(indicators.get("rsi6"))
     bias5 = _num_or_none(indicators.get("bias5"))
+    bias12 = _num_or_none(indicators.get("bias12"))
+    bias24 = _num_or_none(indicators.get("bias24"))
+    boll_position = _num_or_none(indicators.get("boll_position"))
     return (
-        (rsi6 is None or rsi6 <= 85)
+        (rsi6 is None or rsi6 < 70)
         and (bias5 is None or bias5 <= 0.06)
+        and (bias12 is None or bias12 < 6)
+        and (bias24 is None or bias24 < 10)
+        and (boll_position is None or boll_position < 0.90)
         and "RSI短线过热" not in tags
+        and "RSI短线偏热" not in tags
         and "BIAS严重偏离MA5" not in tags
+        and "BIAS12明显正乖离" not in tags
+        and "BIAS24严重正乖离" not in tags
         and "接近或突破布林上轨" not in tags
         and "放量急涨" not in tags
     )
@@ -515,15 +544,20 @@ def _can_add_by_trend(market: MarketSnapshot, trend: dict[str, Any]) -> bool:
         and ma10 is not None
         and close > ma5 > ma10
         and "放量急涨" not in tags
+        and "RSI短线过热" not in tags
+        and "RSI短线偏热" not in tags
         and "BIAS严重偏离MA5" not in tags
+        and "BIAS12明显正乖离" not in tags
+        and "BIAS24严重正乖离" not in tags
+        and "接近或突破布林上轨" not in tags
     )
 
 
 def _position_risk_level(score: float, trend: dict[str, Any]) -> str:
     tags = set(trend.get("tags") or [])
-    if "BIAS严重偏离MA5" in tags or score < 45:
+    if {"BIAS严重偏离MA5", "BIAS24严重正乖离"} & tags or score < 45:
         return "HIGH"
-    if {"RSI短线过热", "接近或突破布林上轨"} & tags or score < 60:
+    if {"RSI短线过热", "RSI短线偏热", "BIAS12明显正乖离", "接近或突破布林上轨"} & tags or score < 60:
         return "MEDIUM"
     return "LOW"
 
@@ -629,4 +663,3 @@ def _num_or_none(value: Any) -> float | None:
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
-

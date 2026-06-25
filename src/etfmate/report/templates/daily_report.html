@@ -189,10 +189,11 @@ h3 { font-size: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: w
 .pnl-fill { display: block; height: 100%; border-radius: inherit; background: #6b7d84; }
 .pnl-fill.profit { background: var(--profit); }
 .pnl-fill.loss { background: var(--loss); }
+.risk-summary { margin-bottom: 8px; color: var(--danger); font-weight: 900; }
 .risk-bars { display: grid; gap: 6px; }
 .risk-bar {
   display: grid;
-  grid-template-columns: 42px 150px minmax(130px, 1fr) 44px;
+  grid-template-columns: 42px minmax(150px, 220px) 100px minmax(180px, 1fr);
   gap: 8px;
   align-items: center;
   color: var(--text);
@@ -722,6 +723,7 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
         </div>
         <div class="tab-panel" data-panel="risk">
           {% if nav_dashboard.risk_items %}
+          <div class="risk-summary">高风险 {{ nav_dashboard.risk_summary.high_count }} 只 · 持仓 {{ nav_dashboard.risk_summary.high_held_count }} 只 · 高风险资金仓 {{ nav_dashboard.risk_summary.high_position_pct }}</div>
           <div class="risk-bars">
             {% for etf in nav_dashboard.risk_items %}
             <a class="risk-bar filter-item" data-tags="{{ etf.filter_tags }}" href="#{{ etf.id }}"><span class="heat {{ etf.nav_heat_class }}" title="{{ etf.nav_heat_tip }}" aria-label="{{ etf.nav_heat_tip }}">{{ etf.nav_heat }}</span><span class="bar-name {{ etf.pnl_class }}">{{ etf.code }} {{ etf.name }}</span><span class="risk-track"><span class="risk-fill" style="width: {{ etf.risk_width }}%"></span></span><span>{{ etf.risk_text }}</span></a>

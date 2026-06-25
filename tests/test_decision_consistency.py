@@ -125,6 +125,38 @@ def test_rule_engine_outputs_short_trend_only_without_legacy_total_scores(monkey
     assert "risk_score" not in decision
 
 
+def test_overheat_guard_uses_boll_rsi_and_multi_period_bias():
+    market = MarketSnapshot(
+        code="159999",
+        name="测试ETF",
+        last_price=1.20,
+        pct_chg=2.0,
+        volume=1_500_000,
+        amount=100_000_000,
+        ma5=1.15,
+        ma5_slope_3=0.02,
+        ma10=1.10,
+        ma20=1.00,
+        boll_position=0.91,
+        bias5_ratio=0.02,
+        bias12=6.5,
+        bias24=11.0,
+        rsi6=71,
+        vol_ratio_1_5=1.2,
+        vol_ratio_5_20=1.0,
+        kline_days=120,
+    )
+
+    trend = rule_engine._trend_score(market)
+    decision = rule_engine.decide_position(None, None, market, [], [market])
+
+    assert trend["score"] >= 75
+    assert {"RSI短线偏热", "BIAS12明显正乖离", "BIAS24严重正乖离", "接近或突破布林上轨"} <= set(trend["tags"])
+    assert decision["position_action"] != "OPEN"
+    assert decision["target_position_pct"] == 0
+    assert decision["risk_level"] == "HIGH"
+
+
 def test_portfolio_limit_blocks_new_position(monkeypatch):
     monkeypatch.setattr(
         rule_engine,
@@ -200,6 +232,32 @@ def test_high_risk_zero_target_grid_must_not_keep_normal_buy_side():
     )
 
     assert advice["action"] in {"暂停买入侧", "只保留卖出", "人工复核"}
+    assert advice["suggested_buy_quantity"] is None
+
+
+def test_zero_target_reduce_grid_switches_to_sell_only_even_before_high_risk():
+    grid = GridConfig(
+        code="159999",
+        name="测试ETF",
+        enabled=True,
+        order_quantity=200,
+        buy_fall_pct=3,
+        sell_rise_pct=3,
+    )
+    advice = advise_grid(
+        grid,
+        _market(),
+        _position(),
+        rule_decision={
+            "action": "减仓",
+            "position_action": "REDUCE",
+            "risk_level": "MEDIUM",
+            "trend_score": 35,
+            "target_position_ratio": 0,
+        },
+    )
+
+    assert advice["action"] in {"暂停买入侧", "只保留卖出"}
     assert advice["suggested_buy_quantity"] is None
 
 
@@ -569,6 +627,31 @@ def test_report_etf_display_order_uses_trend_holding_and_pnl_desc():
     _assert_link_order(_panel_html(html, "holding", "pnl"), expected_codes)
     _assert_link_order(_panel_html(html, "pnl", "grid"), expected_codes)
     _assert_link_order(_panel_html(html, "grid", "risk"), expected_codes)
+
+
+def test_report_risk_tab_aggregates_high_risk_items_from_etf_details():
+    recommendations = [
+        _report_item("159901", "高风险持仓", 40, 12, -8),
+        _report_item("159902", "低风险持仓", 90, 4, 5),
+        _report_item("159903", "高风险观察", 86, 0, 0),
+    ]
+    recommendations[0]["position_risk_level"] = "HIGH"
+    recommendations[0]["rule_decision"]["risk_level"] = "HIGH"
+    recommendations[0]["risks"] = ["跌破MA5", "短线量能不足"]
+    recommendations[2]["quantity"] = None
+    recommendations[2]["position_pct"] = None
+    recommendations[2]["position_risk_level"] = "HIGH"
+    recommendations[2]["rule_decision"]["risk_level"] = "HIGH"
+    recommendations[2]["risks"] = ["BIAS24严重正乖离"]
+
+    html = render_html("2026-06-25 10:00:00", recommendations, [], {}, {})
+    risk_panel = html.split('data-panel="risk"', 1)[1]
+
+    assert "无高风险项" not in risk_panel
+    assert "高风险 2 只" in risk_panel
+    assert "持仓 1 只" in risk_panel
+    assert "159901 高风险持仓" in risk_panel
+    assert "159903 高风险观察" in risk_panel
 
 
 def _report_item(code: str, name: str, trend_score: float, holding_pct: float, pnl_pct: float) -> dict:

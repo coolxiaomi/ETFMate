@@ -179,7 +179,10 @@ public enum PositionAction {
 
 ```text
 RSI短线过热
+RSI短线偏热
 BIAS严重偏离MA5
+BIAS12明显正乖离
+BIAS24严重正乖离
 接近或突破布林上轨
 放量急涨
 ```
@@ -196,7 +199,10 @@ BIAS严重偏离MA5
 ```java
 boolean hasTrendCaution(ShortTrendScoreResult result) {
     return result.getTags().contains("RSI短线过热")
+        || result.getTags().contains("RSI短线偏热")
         || result.getTags().contains("BIAS严重偏离MA5")
+        || result.getTags().contains("BIAS12明显正乖离")
+        || result.getTags().contains("BIAS24严重正乖离")
         || result.getTags().contains("接近或突破布林上轨")
         || result.getTags().contains("放量急涨");
 }
@@ -206,10 +212,16 @@ boolean hasTrendCaution(ShortTrendScoreResult result) {
 
 ```text
 noTrendCaution =
-RSI6 <= 85
+RSI6 < 70
 and BIAS5 <= 0.06
+and BIAS12 < +6%
+and BIAS24 < +10%
+and BOLL_POSITION < 0.90
 and tags 不包含 "RSI短线过热"
+and tags 不包含 "RSI短线偏热"
 and tags 不包含 "BIAS严重偏离MA5"
+and tags 不包含 "BIAS12明显正乖离"
+and tags 不包含 "BIAS24严重正乖离"
 and tags 不包含 "接近或突破布林上轨"
 and tags 不包含 "放量急涨"
 ```
@@ -218,10 +230,17 @@ Java 伪代码：
 
 ```java
 boolean noTrendCaution(ShortTrendScoreResult result) {
-    return result.getIndicators().getRsi6() <= 85
+    return result.getIndicators().getRsi6() < 70
         && result.getIndicators().getBias5() <= 0.06
+        // BIAS12/BIAS24 使用百分数值，例如 6 表示 +6%。
+        && result.getIndicators().getBias12() < 6
+        && result.getIndicators().getBias24() < 10
+        && result.getIndicators().getBollPosition() < 0.90
         && !result.getTags().contains("RSI短线过热")
+        && !result.getTags().contains("RSI短线偏热")
         && !result.getTags().contains("BIAS严重偏离MA5")
+        && !result.getTags().contains("BIAS12明显正乖离")
+        && !result.getTags().contains("BIAS24严重正乖离")
         && !result.getTags().contains("接近或突破布林上轨")
         && !result.getTags().contains("放量急涨");
 }
@@ -958,5 +977,5 @@ boolean isAddAllowed(ShortTrendScoreResult result) {
 4. 已持仓时，评分高且无追高提示，可以逐步加仓；评分下降或出现追高提示，应降低目标仓位。
 5. RSI 过热、BIAS 偏离、接近布林上轨、放量急涨时，不应继续加仓，目标仓位应降低一档。
 6. ATR 不参与本文档决策；ATR 后续只进入网格建议或独立波动模块。
-7. 系统输出应是“建议”和“风险提示”，不应输出绝对化交易指令。
-
+7. 当 `targetPositionRatio == 0` 且已有持仓时，主动作必须明确为 `REDUCE` / `EXIT_TREND_POSITION` 这类可执行降风险语义；`TREND_REVIEW` 只能作为辅助标签，不能替代主动作。
+8. 系统输出应是“建议”和“风险提示”，不应输出绝对化交易指令。

@@ -329,9 +329,9 @@ sell_quantity = 基础数量
 
 仅低于 MA60 但尚未触发更严重条件时，也先降低买入侧，不直接关闭整个网格。
 
-### 11.2 高风险目标仓位为 0
+### 11.2 目标仓位为 0
 
-当 `risk_level=HIGH`、`target_position_ratio <= 0` 且当前有持仓时：
+当 `target_position_ratio <= 0` 且当前有持仓，并且仓位动作是 `REDUCE` / `TREND_REVIEW` / `EXIT_TREND_POSITION` / `RISK_REVIEW` / `EXIT_SHORT_TERM`，或规则动作为“减仓/趋势复核/风控复核/退出短线仓位”时：
 
 ```text
 trend_score >= 30 -> 只保留卖出
@@ -340,7 +340,7 @@ suggested_buy_quantity = null
 suggested_sell_quantity = 基础数量
 ```
 
-此场景不得输出普通“维持”，也不得输出正常买入数量。
+此场景不得输出普通“维持”，也不得输出正常买入数量。风险等级 HIGH 只是该规则的强触发条件之一，不是唯一触发条件。
 
 ### 11.3 风控复核与退出短线仓
 
