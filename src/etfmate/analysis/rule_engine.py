@@ -11,15 +11,19 @@ ACTION_NAMES = {
     "LIGHT_OPEN": "轻仓建仓",
     "HOLD": "持有",
     "ADD": "加仓",
-    "HOLD_OR_ADD": "持有观察",
     "HOLD_WAIT_ADD": "持有待加仓确认",
     "HOLD_OR_REDUCE": "持有或小幅减仓",
     "REDUCE": "减仓",
-    "RISK_REVIEW": "风控复核",
+    "TREND_REVIEW": "趋势复核",
+    "EXIT_TREND_POSITION": "退出短线仓位",
+    # Legacy aliases kept for old analysis.json / report re-render compatibility.
+    "HOLD_OR_ADD": "持有观察",
+    "RISK_REVIEW": "趋势复核",
     "EXIT_SHORT_TERM": "退出短线仓位",
 }
 MAX_TOTAL_POSITION_RATIO = 0.80
 MAX_CATEGORY_POSITION_RATIO = 0.15
+MAX_SINGLE_POSITION_RATIO = 0.30
 
 
 def decide_position(
@@ -32,9 +36,6 @@ def decide_position(
     category = classify_etf(market.name or (position.name if position else ""))
     filters = _trade_filters(market, position, category)
     trend = _trend_score(market)
-    momentum = _momentum_score(market, all_markets or [])
-    risk = _risk_score(market)
-    total = round(trend["score"] * 0.45 + momentum["score"] * 0.35 - risk["score"] * 0.20, 1)
     portfolio = _portfolio_state(position, all_positions or [], category)
     decision = _position_decision_from_short_trend(position, market, filters, trend, portfolio)
     return {
@@ -49,10 +50,7 @@ def decide_position(
         "trend_scores": trend["scores"],
         "trend_indicators": trend["indicators"],
         "trend_data_sufficient": trend["data_sufficient"],
-        "momentum_score": momentum["score"],
-        "risk_score": risk["score"],
         "risk_level": decision["risk_level"],
-        "total_score": total,
         "filter_status": filters["status"],
         "blocked_actions": filters["blocked_actions"],
         "current_position_ratio": round(decision["current_position_ratio"], 4),
@@ -70,8 +68,6 @@ def decide_position(
         "risks": decision["warnings"][:6],
         "evidence": {
             "trend": trend["evidence"],
-            "momentum": momentum["evidence"],
-            "risk": risk["evidence"],
             "filters": filters["reasons"],
         },
     }
@@ -136,27 +132,25 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
     boll_position = _num_or_none(market.boll_position)
     bias5 = _num_or_none(market.bias5_ratio)
     rsi6 = _num_or_none(market.rsi6)
-    atr14 = _num_or_none(market.atr14)
-    atr_expansion_ratio = _num_or_none(market.atr_expansion_ratio)
 
-    core_values = [close, ma5, ma10, ma20, ma5_slope_3, boll_position, bias5, rsi6, atr14, atr_expansion_ratio]
+    core_values = [close, ma5, ma10, ma20, ma5_slope_3, vol_ratio_1_5, vol_ratio_5_20, boll_position, bias5, rsi6]
     data_sufficient = bool((market.kline_days or 0) >= 60 and all(value is not None for value in core_values))
     tags: list[str] = []
 
     ma_score = 0
     if None not in (close, ma5, ma10, ma20, ma5_slope_3):
         if close > ma5 and ma5 > ma10 and ma10 > ma20 and ma5_slope_3 > 0:
-            ma_score = 30
+            ma_score = 35
         elif close > ma5 and ma5 > ma10 and ma5_slope_3 > 0:
-            ma_score = 25
+            ma_score = 30
         elif close > ma5 and ma5_slope_3 > 0:
-            ma_score = 18
+            ma_score = 22
         elif close > ma5:
-            ma_score = 12
+            ma_score = 15
         elif close < ma5 and ma5 < ma10:
             ma_score = 0
         else:
-            ma_score = 5
+            ma_score = 8
 
     vol_score = 0
     if vol_ratio_1_5 is not None and vol_ratio_5_20 is not None:
@@ -201,27 +195,18 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
     rsi_score = 0
     if rsi6 is not None:
         if 50 < rsi6 <= 75:
-            rsi_score = 15
+            rsi_score = 20
         elif 75 < rsi6 <= 85:
-            rsi_score = 10
+            rsi_score = 14
         elif rsi6 > 85:
-            rsi_score = 5
-        elif 40 <= rsi6 <= 50:
             rsi_score = 8
+        elif 40 <= rsi6 <= 50:
+            rsi_score = 10
         else:
-            rsi_score = 2
+            rsi_score = 3
 
-    atr_risk_deduct = 0
-    if atr_expansion_ratio is not None:
-        if atr_expansion_ratio >= 1.8:
-            atr_risk_deduct = 10
-        elif atr_expansion_ratio >= 1.5:
-            atr_risk_deduct = 7
-        elif atr_expansion_ratio >= 1.2:
-            atr_risk_deduct = 3
-
-    score = round(_clamp(ma_score + vol_score + boll_score + bias_score + rsi_score - atr_risk_deduct, 0, 100), 2)
-    level, name = _short_trend_level(score, atr_risk_deduct)
+    score = round(_clamp(ma_score + boll_score + vol_score + rsi_score + bias_score, 0, 100), 2)
+    level, name = _short_trend_level(score)
 
     if rsi6 is not None and rsi6 > 85:
         tags.append("RSI短线过热")
@@ -229,8 +214,6 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
         tags.append("BIAS严重偏离MA5")
     if boll_position is not None and boll_position > 0.95:
         tags.append("接近或突破布林上轨")
-    if atr_expansion_ratio is not None and atr_expansion_ratio >= 1.5:
-        tags.append("ATR波动放大")
     if vol_ratio_1_5 is not None and bias5 is not None and vol_ratio_1_5 >= 1.5 and bias5 > 0.04:
         tags.append("放量急涨")
     if close is not None and ma5 is not None and close < ma5:
@@ -250,7 +233,7 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
         "boll_score": boll_score,
         "bias_score": bias_score,
         "rsi_score": rsi_score,
-        "atr_risk_deduct": atr_risk_deduct,
+        "short_trend_score": score,
     }
     indicators = {
         "ma5_slope_3": ma5_slope_3,
@@ -259,7 +242,6 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
         "boll_position": boll_position,
         "bias5": bias5,
         "rsi6": rsi6,
-        "atr_expansion_ratio": atr_expansion_ratio,
     }
     evidence = [
         f"短线趋势{name} {score:.0f}",
@@ -267,11 +249,10 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
         + "/".join(
             [
                 f"MA{ma_score}",
-                f"VOL{vol_score}",
                 f"BOLL{boll_score}",
-                f"BIAS{bias_score}",
+                f"VOL{vol_score}",
                 f"RSI{rsi_score}",
-                f"ATR-{atr_risk_deduct}",
+                f"BIAS{bias_score}",
             ]
         ),
     ]
@@ -287,49 +268,6 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
         "tags": tags,
         "evidence": evidence,
     }
-
-
-def _momentum_score(market: MarketSnapshot, all_markets: list[MarketSnapshot]) -> dict[str, Any]:
-    score = 0
-    evidence: list[str] = []
-    if market.ret20 is not None and market.ret20 > 0:
-        score += 20
-        evidence.append(f"RET20 {market.ret20:+.2f}%")
-    if market.ret60 is not None and market.ret60 > 0:
-        score += 20
-        evidence.append(f"RET60 {market.ret60:+.2f}%")
-    if _top_percentile(market, all_markets, "ret20", 0.30):
-        score += 25
-        evidence.append("RET20处于本次持仓池前30%")
-    if _top_percentile(market, all_markets, "ret60", 0.30):
-        score += 25
-        evidence.append("RET60处于本次持仓池前30%")
-    amount_ratio = market.amount_ratio20 or market.vol_ratio
-    if not (market.pct_chg < -2 and amount_ratio and amount_ratio > 1.5):
-        score += 10
-        evidence.append("未出现放量大跌")
-    return {"score": min(100, score), "evidence": evidence or ["动量数据不足"]}
-
-
-def _risk_score(market: MarketSnapshot) -> dict[str, Any]:
-    score = 0
-    evidence: list[str] = []
-    if market.rsi14 is not None and market.rsi14 > 80:
-        score += 20
-        evidence.append(f"RSI14 {market.rsi14:.1f}，短线过热")
-    if market.ma20 and abs(market.last_price / market.ma20 - 1) > 0.08:
-        score += 20
-        evidence.append("现价偏离MA20超过8%")
-    if market.max_drawdown_60 is not None and market.max_drawdown_60 <= -15:
-        score += 20
-        evidence.append(f"60日回撤 {market.max_drawdown_60:.2f}%")
-    if market.atr14_pct is not None and market.atr14_pct > 3:
-        score += 20
-        evidence.append(f"ATR14/价格 {market.atr14_pct:.2f}%")
-    if market.ret3 is not None and market.ret3 <= -5:
-        score += 20
-        evidence.append(f"近3日跌幅 {market.ret3:.2f}%")
-    return {"score": min(100, score), "evidence": evidence or ["未触发主要风险项"]}
 
 
 def _position_decision_from_short_trend(
@@ -374,11 +312,11 @@ def _position_decision_from_short_trend(
     if not holding:
         if score >= 85 and no_high_risk and not _portfolio_blocks_add(portfolio):
             action = "OPEN"
-            target_ratio = _apply_portfolio_caps(0.08, current_ratio, portfolio, warnings)
+            target_ratio = _apply_portfolio_caps(0.15, current_ratio, portfolio, warnings)
             reasons.append("未持仓且短线趋势评分不低于85、无高风险标签，进入初始建仓区")
         elif score >= 75 and no_high_risk and not _portfolio_blocks_add(portfolio):
             action = "LIGHT_OPEN"
-            target_ratio = _apply_portfolio_caps(0.04, current_ratio, portfolio, warnings)
+            target_ratio = _apply_portfolio_caps(0.10, current_ratio, portfolio, warnings)
             reasons.append("未持仓且短线趋势评分不低于75、无高风险标签，可轻仓建仓观察")
         else:
             action = "WATCH"
@@ -395,11 +333,11 @@ def _position_decision_from_short_trend(
         reasons.append(f"基础目标仓位 {base_target:.0%}，风险调整后目标仓位 {target_ratio:.0%}")
 
         if risk_level == "HIGH" and target_ratio <= 0 and current_ratio > 0:
-            action = "REDUCE" if current_ratio >= 0.05 else "RISK_REVIEW"
+            action = "REDUCE" if current_ratio >= 0.05 else "TREND_REVIEW"
             reasons.append("风险等级 HIGH 且目标仓位为 0，不允许被微调阈值降级为普通持有")
         elif serious_risk:
-            action = "EXIT_SHORT_TERM" if (_num_or_none(market.atr_expansion_ratio) or 0) >= 1.5 else "RISK_REVIEW"
-            reasons.append("短线评分低于45且价格跌破MA5、MA5低于MA10，触发风控复核")
+            action = "EXIT_TREND_POSITION"
+            reasons.append("短线评分低于45且价格跌破MA5、MA5低于MA10，触发退出短线仓位")
         elif abs(gap) < 0.05:
             action = "HOLD"
             reasons.append("目标仓位与当前仓位差小于5%，不做频繁微调")
@@ -420,8 +358,8 @@ def _position_decision_from_short_trend(
             else:
                 adjust_ratio = min(max(gap, 0.0), 0.20)
                 new_ratio = min(current_ratio + adjust_ratio, target_ratio)
-        elif action in {"REDUCE", "RISK_REVIEW", "EXIT_SHORT_TERM"}:
-            max_reduce_step = 0.50 if serious_risk and (_num_or_none(market.atr_expansion_ratio) or 0) >= 1.5 else 0.30
+        elif action in {"REDUCE", "TREND_REVIEW", "EXIT_TREND_POSITION"}:
+            max_reduce_step = 0.50 if serious_risk else 0.30
             reduce_gap = max(0.0, current_ratio - target_ratio)
             adjust_ratio = min(reduce_gap, max_reduce_step)
             new_ratio = max(current_ratio - adjust_ratio, target_ratio, 0.0)
@@ -486,32 +424,32 @@ def _current_position_ratio(position: Position | None, portfolio: dict[str, Any]
 
 def _base_target_position(score: float, no_high_risk: bool) -> float:
     if score >= 85 and no_high_risk:
-        return 0.12
+        return 0.30
     if score >= 75 and no_high_risk:
-        return 0.08
+        return 0.20
     if score >= 60:
-        return 0.05
+        return 0.10
     if score >= 45:
-        return 0.02
+        return 0.05
     return 0.00
 
 
 def _downgrade_target_position(base_target: float) -> float:
-    if base_target >= 0.12:
-        return 0.08
-    if base_target >= 0.08:
+    if base_target >= 0.30:
+        return 0.20
+    if base_target >= 0.20:
+        return 0.10
+    if base_target >= 0.10:
         return 0.05
     if base_target >= 0.05:
-        return 0.02
-    if base_target >= 0.02:
         return 0.00
     return 0.00
 
 
 def _apply_portfolio_caps(target_ratio: float, current_ratio: float, portfolio: dict[str, Any], warnings: list[str]) -> float:
-    capped = min(target_ratio, 0.08)
+    capped = min(target_ratio, MAX_SINGLE_POSITION_RATIO)
     if target_ratio > capped:
-        warnings.append("单只 ETF 目标仓位按 8% 上限压缩")
+        warnings.append("单只 ETF 目标仓位按 30% 上限压缩")
     if portfolio.get("position_pct_confidence") == "low":
         if capped > current_ratio:
             warnings.append("资金仓位口径置信度低，新增买入目标先按 4% 以内试探")
@@ -538,23 +476,22 @@ def _portfolio_blocks_add(portfolio: dict[str, Any]) -> bool:
 
 def _has_high_risk(trend: dict[str, Any]) -> bool:
     tags = set(trend.get("tags") or [])
-    high_risk_tags = {"RSI短线过热", "BIAS严重偏离MA5", "ATR波动放大", "放量急涨", "接近或突破布林上轨"}
+    high_risk_tags = {"RSI短线过热", "BIAS严重偏离MA5", "放量急涨", "接近或突破布林上轨"}
     return bool(tags & high_risk_tags)
 
 
 def _no_high_risk(trend: dict[str, Any]) -> bool:
     tags = set(trend.get("tags") or [])
-    scores = trend.get("scores") or {}
     indicators = trend.get("indicators") or {}
-    atr_deduct = _num_or_none(scores.get("atr_risk_deduct")) or 0
     rsi6 = _num_or_none(indicators.get("rsi6"))
     bias5 = _num_or_none(indicators.get("bias5"))
     return (
-        atr_deduct == 0
-        and (rsi6 is None or rsi6 <= 85)
+        (rsi6 is None or rsi6 <= 85)
         and (bias5 is None or bias5 <= 0.06)
+        and "RSI短线过热" not in tags
+        and "BIAS严重偏离MA5" not in tags
+        and "接近或突破布林上轨" not in tags
         and "放量急涨" not in tags
-        and "ATR波动放大" not in tags
     )
 
 
@@ -577,14 +514,14 @@ def _can_add_by_trend(market: MarketSnapshot, trend: dict[str, Any]) -> bool:
         and ma5 is not None
         and ma10 is not None
         and close > ma5 > ma10
-        and "ATR波动放大" not in tags
+        and "放量急涨" not in tags
         and "BIAS严重偏离MA5" not in tags
     )
 
 
 def _position_risk_level(score: float, trend: dict[str, Any]) -> str:
     tags = set(trend.get("tags") or [])
-    if {"ATR波动放大", "BIAS严重偏离MA5"} & tags or score < 45:
+    if "BIAS严重偏离MA5" in tags or score < 45:
         return "HIGH"
     if {"RSI短线过热", "接近或突破布林上轨"} & tags or score < 60:
         return "MEDIUM"
@@ -612,10 +549,10 @@ def _action_copy(action: str, high_risk: bool, score: float) -> list[str]:
     if action == "OPEN":
         return ["短线趋势较强且无明显过热或波动放大，可进入建仓观察区；首笔不建议一次性重仓"]
     if action == "LIGHT_OPEN":
-        return ["短线趋势偏强，可轻仓建仓观察，后续继续看 MA5、量能和 ATR 稳定性"]
+        return ["短线趋势偏强，可轻仓建仓观察，后续继续看 MA5、量能和短线动能稳定性"]
     if action == "WATCH":
         if high_risk and score >= 75:
-            return ["趋势评分较高但存在短线过热或波动放大，不适合直接追高"]
+            return ["趋势评分较高但存在短线过热或偏离过大，不适合直接追高"]
         return ["短线趋势强度不足或交易过滤受限，暂不进入建仓区"]
     if action == "HOLD":
         return ["当前仓位与目标仓位基本匹配，继续持有观察"]
@@ -627,10 +564,10 @@ def _action_copy(action: str, high_risk: bool, score: float) -> list[str]:
         return ["目标仓位高于当前仓位，但加仓确认条件不足，先持有并等待加仓确认"]
     if action == "REDUCE":
         return ["目标仓位低于当前仓位，建议降低部分仓位"]
-    if action == "RISK_REVIEW":
-        return ["短线趋势明显转弱，触发持仓风控复核"]
-    if action == "EXIT_SHORT_TERM":
-        return ["短线趋势转弱且波动风险放大，建议退出短线进攻仓位或降至观察仓位"]
+    if action in {"TREND_REVIEW", "RISK_REVIEW"}:
+        return ["短线趋势出现异常变化，触发持仓趋势复核"]
+    if action in {"EXIT_TREND_POSITION", "EXIT_SHORT_TERM"}:
+        return ["短线趋势明显转弱，建议退出短线仓位或降至观察仓位"]
     return []
 
 
@@ -671,9 +608,9 @@ def _liquidity_threshold(category: str) -> float:
     return 50_000_000
 
 
-def _short_trend_level(score: float, atr_risk_deduct: int) -> tuple[str, str]:
-    if score >= 85 and atr_risk_deduct == 0:
-        return "STRONG_ATTACK", "强势进攻区"
+def _short_trend_level(score: float) -> tuple[str, str]:
+    if score >= 85:
+        return "STRONG_TREND", "短线强趋势"
     if score >= 75:
         return "UPTREND", "短线上升趋势"
     if score >= 60:
@@ -693,13 +630,3 @@ def _num_or_none(value: Any) -> float | None:
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
-
-def _top_percentile(market: MarketSnapshot, all_markets: list[MarketSnapshot], field: str, pct: float) -> bool:
-    values = sorted(
-        [(getattr(item, field), item.code) for item in all_markets if getattr(item, field, None) is not None],
-        reverse=True,
-    )
-    if len(values) < 3:
-        return False
-    cutoff = max(1, round(len(values) * pct))
-    return market.code in {code for _, code in values[:cutoff]}

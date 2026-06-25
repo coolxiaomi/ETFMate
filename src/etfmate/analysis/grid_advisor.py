@@ -20,7 +20,6 @@ def advise_grid(
     rule_action = str((rule_decision or {}).get("action") or "")
     position_action = str((rule_decision or {}).get("position_action") or "")
     trend_score = _num_or_zero((rule_decision or {}).get("trend_score"))
-    risk_score = _num_or_zero((rule_decision or {}).get("risk_score"))
     position_risk_level = str((rule_decision or {}).get("risk_level") or "")
     target_ratio = _num_or_zero((rule_decision or {}).get("target_position_ratio"))
     blocked = set((rule_decision or {}).get("blocked_actions") or [])
@@ -131,14 +130,14 @@ def advise_grid(
             suggested_buy_fall = grid.buy_fall_pct if grid else suggested_buy_fall
             suggested_sell_rise = grid.sell_rise_pct if grid else suggested_sell_rise
             reasons.append("风险等级 HIGH 且目标仓位为 0，网格买入不再按正常数量建议；需人工停用买触发或只保留卖出纪律")
-        elif position_action in {"EXIT_SHORT_TERM", "RISK_REVIEW"} or rule_action in {"退出短线仓位", "风控复核"} or trend_score < 45:
+        elif position_action in {"EXIT_TREND_POSITION", "TREND_REVIEW", "EXIT_SHORT_TERM", "RISK_REVIEW"} or rule_action in {"退出短线仓位", "趋势复核", "风控复核"} or trend_score < 45:
             action = "降低买入侧"
             suggested_buy_qty = _round_qty(base_lot_qty * 0.5)
             suggested_sell_qty = base_lot_qty
             suggested_buy_fall = grid.buy_fall_pct if grid else suggested_buy_fall
             suggested_sell_rise = grid.sell_rise_pct if grid else suggested_sell_rise
             reasons.append("短线趋势评分转弱或操作建议触发风控复核；买入侧改为保守降速，卖出侧纪律保留")
-        elif position_action == "REDUCE" or rule_action == "减仓" or risk_score >= 70 or position_risk_level == "HIGH" or {"买入", "加仓", "提高网格买入侧"} & blocked:
+        elif position_action == "REDUCE" or rule_action == "减仓" or position_risk_level == "HIGH" or {"买入", "加仓", "提高网格买入侧"} & blocked:
             action = "降低买入侧" if action == "维持" else action
             suggested_buy_qty = _round_qty((suggested_buy_qty or base_lot_qty) * 0.5)
             suggested_sell_qty = max(suggested_sell_qty or base_lot_qty, base_lot_qty)
@@ -262,7 +261,7 @@ def _grid_purpose(
 ) -> str:
     if not position:
         return "建仓网格"
-    if action in {"只保留卖出", "暂停买入侧"} or position_action in {"REDUCE", "RISK_REVIEW", "EXIT_SHORT_TERM"} or rule_action in {"减仓", "风控复核", "退出短线仓位"}:
+    if action in {"只保留卖出", "暂停买入侧"} or position_action in {"REDUCE", "TREND_REVIEW", "EXIT_TREND_POSITION", "RISK_REVIEW", "EXIT_SHORT_TERM"} or rule_action in {"减仓", "趋势复核", "风控复核", "退出短线仓位"}:
         return "止盈/退出网格"
     if strong_positive and position.pnl_pct > 0 and not trend_profit_continuation:
         return "止盈网格"
@@ -409,9 +408,9 @@ def _is_profit_trend_continuation(
         return False
     if hard_weak or soft_weak:
         return False
-    if position_action in {"REDUCE", "RISK_REVIEW", "EXIT_SHORT_TERM"}:
+    if position_action in {"REDUCE", "TREND_REVIEW", "EXIT_TREND_POSITION", "RISK_REVIEW", "EXIT_SHORT_TERM"}:
         return False
-    if rule_action in {"减仓", "风控复核", "退出短线仓位"}:
+    if rule_action in {"减仓", "趋势复核", "风控复核", "退出短线仓位"}:
         return False
     return True
 

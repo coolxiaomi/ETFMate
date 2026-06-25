@@ -133,7 +133,6 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "nav_heat_class": nav["heat_class"],
         "nav_heat_tip": nav["heat_tip"],
         "nav_meta": nav["meta"],
-        "risk_score": _float_or_none(rec.get("rule_risk_score")) if rec else None,
         "grid_action_short": grid_short,
         "grid_action_class": _grid_action_class(grid_action),
         "title_meta": _title_meta(rec, grid),
@@ -417,14 +416,7 @@ def _grid_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _risk_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    items = [item for item in etfs if (item.get("risk_score") or 0) >= 60]
-    items.sort(key=lambda item: (-(item.get("risk_score") or 0), item.get("code")))
-    rows = []
-    for item in items:
-        score = item.get("risk_score")
-        width = max(6, min(100, score if score is not None else 35))
-        rows.append({**item, "risk_width": f"{width:.1f}", "risk_text": "-" if score is None else f"{score:.0f}"})
-    return rows
+    return []
 
 
 def _trend_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1160,12 +1152,13 @@ def _grid_qty_html(value: Any) -> str:
 
 
 def _rule_score_summary(item: dict) -> str:
+    rule = item.get("rule_decision") or {}
     return "；".join(
         [
-            f"综合 {_num(item.get('rule_total_score'), 1)}",
             f"趋势评分 {_num(item.get('rule_trend_score'), 0)}",
-            f"中期动量 {_num(item.get('rule_momentum_score'), 0)}",
-            f"风险 {_num(item.get('rule_risk_score'), 0)}",
+            f"趋势等级 {_cell(rule.get('trend_level') if isinstance(rule, dict) else None)}",
+            f"过滤状态 {_cell(item.get('rule_filter_status'))}",
+            f"风险等级 {_risk_level_text(item.get('position_risk_level'))}",
         ]
     )
 
@@ -1185,7 +1178,6 @@ def _rule_score_detail(item: dict) -> str:
                 f"BOLL{_num(scores.get('boll_score'), 0)}",
                 f"BIAS{_num(scores.get('bias_score'), 0)}",
                 f"RSI{_num(scores.get('rsi_score'), 0)}",
-                f"ATR-{_num(scores.get('atr_risk_deduct'), 0)}",
             ]
         )
     return _cell_html(
@@ -1211,14 +1203,13 @@ def _rule_score_alert(item: dict) -> str:
     if not isinstance(rule, dict):
         return _cell_html("-")
     status = str(rule.get("filter_status") or "")
-    risk = _float_or_none(rule.get("risk_score"))
     blocked = rule.get("blocked_actions") or []
     if status == "禁止交易" or "全部" in blocked:
         return _span("触发硬过滤", "danger")
     if {"买入", "加仓", "提高网格买入侧"} & set(blocked):
         return _span("限制新增买入", "warn")
-    if risk is not None and risk >= 70:
-        return _span("风险评分偏高", "danger")
+    if str(rule.get("risk_level") or "") == "HIGH":
+        return _span("风险等级偏高", "danger")
     return _span("规则允许正常复核", "neutral")
 
 
@@ -1364,6 +1355,8 @@ def _enum_text(value: Any) -> str:
         "HOLD_WAIT_ADD": "持有待加仓确认",
         "HOLD_OR_REDUCE": "持有或小幅减仓",
         "REDUCE": "减仓",
+        "TREND_REVIEW": "趋势复核",
+        "EXIT_TREND_POSITION": "退出短线仓位",
         "RISK_REVIEW": "风控复核",
         "EXIT_SHORT_TERM": "退出短线仓位",
     }
@@ -1608,7 +1601,7 @@ def _trend_heat_tip(item: dict | None, heat: str) -> str:
 
 def _trend_heat(value: Any, trend_code: Any = None) -> tuple[str, str]:
     by_code = {
-        "STRONG_ATTACK": ("热", "heat-hot"),
+        "STRONG_TREND": ("热", "heat-hot"),
         "UPTREND": ("温", "heat-warm"),
         "WEAK_UPTREND": ("平", "heat-flat"),
         "SIDEWAYS": ("凉", "heat-cool"),

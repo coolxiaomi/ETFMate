@@ -45,6 +45,38 @@ def _position(position_pct: float = 3.36) -> Position:
     )
 
 
+def test_short_trend_score_uses_pure_five_factor_score_without_atr_deduct():
+    market = MarketSnapshot(
+        code="159999",
+        name="测试ETF",
+        last_price=1.10,
+        pct_chg=1.0,
+        volume=1_500_000,
+        amount=100_000_000,
+        ma5=1.05,
+        ma5_slope_3=0.02,
+        ma10=1.00,
+        ma20=0.95,
+        boll_position=0.80,
+        bias5_ratio=0.02,
+        rsi6=60,
+        atr14=0.02,
+        atr_expansion_ratio=2.0,
+        vol_ratio_1_5=1.35,
+        vol_ratio_5_20=1.1,
+        kline_days=120,
+    )
+
+    trend = rule_engine._trend_score(market)
+
+    assert trend["score"] == 100
+    assert trend["level"] == "STRONG_TREND"
+    assert trend["name"] == "短线强趋势"
+    assert "atr_risk_deduct" not in trend["scores"]
+    assert "positive_normalized_score" not in trend["scores"]
+    assert "ATR波动放大" not in trend["tags"]
+
+
 def test_high_risk_zero_target_should_not_be_downgraded_to_hold(monkeypatch):
     monkeypatch.setattr(
         rule_engine,
@@ -60,14 +92,36 @@ def test_high_risk_zero_target_should_not_be_downgraded_to_hold(monkeypatch):
             "evidence": ["测试趋势转弱"],
         },
     )
-    monkeypatch.setattr(rule_engine, "_momentum_score", lambda market, all_markets: {"score": 0, "evidence": []})
-    monkeypatch.setattr(rule_engine, "_risk_score", lambda market: {"score": 80, "evidence": ["测试高风险"]})
-
     decision = rule_engine.decide_position(_position(), None, _market(), [_position()], [_market()])
 
-    assert decision["position_action"] in {"REDUCE", "RISK_REVIEW", "EXIT_SHORT_TERM"}
+    assert decision["position_action"] in {"REDUCE", "TREND_REVIEW", "EXIT_TREND_POSITION"}
     assert decision["action"] != "持有"
     assert any("目标仓位为 0" in reason for reason in decision["reasons"])
+
+
+def test_rule_engine_outputs_short_trend_only_without_legacy_total_scores(monkeypatch):
+    monkeypatch.setattr(
+        rule_engine,
+        "_trend_score",
+        lambda market: {
+            "score": 90,
+            "name": "短线强趋势",
+            "level": "STRONG_TREND",
+            "tags": [],
+            "scores": {},
+            "indicators": {},
+            "data_sufficient": True,
+            "evidence": ["测试强趋势"],
+        },
+    )
+
+    decision = rule_engine.decide_position(None, None, _market(), [], [_market()])
+
+    assert decision["position_action"] == "OPEN"
+    assert decision["target_position_pct"] == 15
+    assert "total_score" not in decision
+    assert "momentum_score" not in decision
+    assert "risk_score" not in decision
 
 
 def test_portfolio_limit_blocks_new_position(monkeypatch):
@@ -76,8 +130,8 @@ def test_portfolio_limit_blocks_new_position(monkeypatch):
         "_trend_score",
         lambda market: {
             "score": 90,
-            "name": "强势进攻区",
-            "level": "STRONG_ATTACK",
+            "name": "短线强趋势",
+            "level": "STRONG_TREND",
             "tags": [],
             "scores": {},
             "indicators": {},
@@ -85,8 +139,6 @@ def test_portfolio_limit_blocks_new_position(monkeypatch):
             "evidence": ["测试强趋势"],
         },
     )
-    monkeypatch.setattr(rule_engine, "_momentum_score", lambda market, all_markets: {"score": 90, "evidence": []})
-    monkeypatch.setattr(rule_engine, "_risk_score", lambda market: {"score": 0, "evidence": []})
     existing = [
         Position("510500", "中证500ETF", 1000, 1, 1, 1000, 0, 0, position_pct=82, position_pct_source="ths_account_total_asset"),
     ]
@@ -103,8 +155,8 @@ def test_fallback_holding_pct_does_not_trigger_portfolio_hard_cap(monkeypatch):
         "_trend_score",
         lambda market: {
             "score": 90,
-            "name": "强势进攻区",
-            "level": "STRONG_ATTACK",
+            "name": "短线强趋势",
+            "level": "STRONG_TREND",
             "tags": [],
             "scores": {},
             "indicators": {},
@@ -112,8 +164,6 @@ def test_fallback_holding_pct_does_not_trigger_portfolio_hard_cap(monkeypatch):
             "evidence": ["测试强趋势"],
         },
     )
-    monkeypatch.setattr(rule_engine, "_momentum_score", lambda market, all_markets: {"score": 90, "evidence": []})
-    monkeypatch.setattr(rule_engine, "_risk_score", lambda market: {"score": 0, "evidence": []})
     existing = [
         Position("510500", "中证500ETF", 1000, 1, 1, 1000, 0, 0, position_pct=100, position_pct_source="positions_market_value_fallback"),
     ]
@@ -139,8 +189,8 @@ def test_high_risk_zero_target_grid_must_not_keep_normal_buy_side():
         _market(),
         _position(),
         rule_decision={
-            "action": "风控复核",
-            "position_action": "RISK_REVIEW",
+            "action": "趋势复核",
+            "position_action": "TREND_REVIEW",
             "risk_level": "HIGH",
             "trend_score": 25,
             "target_position_ratio": 0,
