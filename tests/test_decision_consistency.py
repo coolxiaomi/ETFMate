@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from etfmate.analysis import rule_engine
 from etfmate.analysis.grid_advisor import advise_grid
 from etfmate.analysis.trade_reviewer import review_trade_periods
+from etfmate.browser.ths_account import extract_watchlist
 from etfmate.cli import _position as _cli_position
 from etfmate.report.daily_report import _ai_judgement_html, _holding_view, render_html
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position, Trade
@@ -402,6 +403,39 @@ def test_watchlist_not_open_does_not_emit_executable_grid():
     assert advice["grid_applicable"] is False
     assert advice["grid_purpose"] == "暂不设网格"
     assert advice["suggested_base_price"] is None
+
+
+def test_watchlist_keeps_commodity_gold_and_qdii_etfs():
+    snapshot = {
+        "text": "\n".join(
+            [
+                "518880",
+                "黄金ETF",
+                "159985",
+                "豆粕ETF",
+                "513100",
+                "纳指ETF(QDII)",
+                "600519",
+                "贵州茅台",
+                "123456",
+                "测试转债",
+            ]
+        )
+    }
+
+    included, filtered = extract_watchlist(snapshot)
+    included_codes = {item["code"] for item in included}
+    filtered_codes = {item["code"] for item in filtered}
+
+    assert {"518880", "159985", "513100"} <= included_codes
+    assert "600519" in filtered_codes
+    assert "123456" in filtered_codes
+
+
+def test_etf_classifier_keeps_commodity_gold_and_qdii_as_analysis_categories():
+    assert rule_engine.classify_etf("黄金ETF") == "商品ETF"
+    assert rule_engine.classify_etf("豆粕ETF") == "商品ETF"
+    assert rule_engine.classify_etf("纳指ETF(QDII)") == "跨境ETF"
 
 
 def test_position_pct_uses_account_total_asset_and_keeps_holding_pct():

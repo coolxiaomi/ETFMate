@@ -1,8 +1,8 @@
-# ETFMate 短线趋势评分算法设计文档
+# ETFMate 短线趋势评分算法设计文档（修正版）
 
 ## 1. 目标
 
-本算法用于根据 ETF 的短线技术指标，计算一个统一的 `ShortTrendScore`，用于判断 ETF 当前是否处于短线强势进攻状态。
+本算法用于根据 ETF 的短线技术指标，计算统一的 `ShortTrendScore`，用于判断 ETF 当前是否处于短线趋势强弱状态。
 
 该评分适用于：
 
@@ -18,13 +18,14 @@
 ETF候选池过滤
 风险标签生成
 AI分析解释
+网格条件单辅助判断
 ```
 
 注意：
 
 ```text
 ShortTrendScore 不直接等于买入或卖出信号。
-系统不得输出“必须买入”“必须清仓”“满仓”“梭哈”等交易指令。
+系统不得输出“必须买入”“必须清仓”“满仓”“梭哈”等绝对交易指令。
 ```
 
 推荐输出：
@@ -36,11 +37,52 @@ ShortTrendScore 不直接等于买入或卖出信号。
 波动放大
 不适合追涨
 触发风控复核
+适合继续观察
 ```
 
 ---
 
-## 2. 算法定位
+## 2. 适用范围
+
+当前版本面向以下场内 ETF/LOF/基金类标的：
+
+```text
+宽基 ETF
+行业 ETF
+主题 ETF
+跨境 / QDII ETF
+商品 / 黄金 ETF
+债券 ETF
+货币 ETF
+```
+
+示例：
+
+```text
+宽基 ETF：沪深300ETF、中证500ETF、创业板ETF、科创50ETF、上证50ETF等
+行业/主题 ETF：证券ETF、半导体ETF、芯片ETF、军工ETF、新能源ETF、医药ETF、消费ETF等
+跨境/QDII ETF：纳指ETF、标普ETF、恒生科技ETF、中概互联ETF等
+商品/黄金 ETF：黄金ETF、豆粕ETF、能源化工ETF等
+债券/货币 ETF：国债ETF、政金债ETF、货币ETF、现金类ETF等
+```
+
+当前版本仍不覆盖：
+
+```text
+杠杆/反向 ETF
+```
+
+说明：
+
+```text
+商品/黄金、跨境/QDII、债券、货币 ETF 不应在自选池或分析 universe 中被过滤掉。
+它们也可以计算 ShortTrendScore，但解释和仓位动作必须结合 ETF 类型分层处理。
+例如跨境/QDII 需要额外注意海外市场时差、汇率、溢价和额度因素；商品/黄金需要额外注意商品价格、避险属性和宏观因子；债券/货币 ETF 的波动和流动性阈值不能照搬权益 ETF。
+```
+
+---
+
+## 3. 算法定位
 
 本算法是：
 
@@ -51,9 +93,9 @@ ETF短线趋势评分 / ETF短线进攻评分
 不是：
 
 ```text
-ETF中期趋势评分
-ETF长期趋势评分
-ETF轮动主排序因子
+ETF估值评分
+ETF长期配置评分
+ETF中期轮动主排序因子
 ```
 
 原因：
@@ -68,7 +110,7 @@ BIAS5
 短周期ATR变化
 ```
 
-这些指标对日级波动比较敏感，更适合判断短线状态，而不适合直接决定 ETF 轮动排名。
+这些指标对日级波动比较敏感，更适合判断短线状态，而不适合单独决定 ETF 中期轮动排名。
 
 ETF 轮动主模型建议另设：
 
@@ -93,7 +135,7 @@ ShortTrendScore 使用本算法计算。
 
 ---
 
-## 3. 使用指标
+## 4. 使用指标
 
 本算法使用以下指标：
 
@@ -108,58 +150,104 @@ ATR
 
 各指标作用：
 
-| 指标   | 作用           |
-| ---- | ------------ |
-| MA   | 判断短线趋势方向     |
-| VOL  | 判断成交量是否确认趋势  |
-| BOLL | 判断价格所处强弱区间   |
-| BIAS | 判断是否短线偏离过大   |
-| RSI  | 判断短线动能强弱     |
-| ATR  | 判断波动风险是否突然放大 |
+| 指标 | 作用 |
+|---|---|
+| MA | 判断短线趋势方向，是核心趋势因子 |
+| VOL | 判断成交量是否确认趋势，是辅助确认因子 |
+| BOLL | 判断价格所处强弱区间 |
+| BIAS | 判断价格是否短线偏离过大 |
+| RSI | 判断短线动能强弱 |
+| ATR | 判断波动风险是否突然放大 |
 
 ---
 
-## 4. 总分结构
+## 5. 总分结构
 
-总分为 `0 ~ 100`。
+最终总分为 `0 ~ 100`。
+
+正向评分项如下：
+
+| 模块 | 最高分 | 说明 |
+|---|---:|---|
+| MA_SCORE | 30 | 看 close / MA5 / MA10 / MA20 / MA5斜率 |
+| VOL_SCORE | 15 | 看 vol_ratio_1_5 和 vol_ratio_5_20 |
+| BOLL_SCORE | 20 | 看 boll_position |
+| BIAS_SCORE | 10 | 看 bias5_ratio |
+| RSI_SCORE | 15 | 看 rsi6 |
+| 正向合计 | 90 | 正向指标最高只有 90 分 |
+
+风险扣分项如下：
+
+| 模块 | 最大扣分 | 说明 |
+|---|---:|---|
+| ATR_RISK_DEDUCT | 10 | 看 atr_expansion_ratio |
+
+重要说明：
 
 ```text
-ShortTrendScore =
+MA_SCORE + VOL_SCORE + BOLL_SCORE + BIAS_SCORE + RSI_SCORE 的最高分是 90 分，不是 100 分。
+因此必须先将正向得分归一化到 100 分制，再扣除 ATR 风险分。
+```
+
+---
+
+## 6. 最终评分公式
+
+### 6.1 正向原始分
+
+```text
+positiveRawScore =
 MA_SCORE
 + VOL_SCORE
 + BOLL_SCORE
 + BIAS_SCORE
 + RSI_SCORE
-- ATR_RISK_DEDUCT
 ```
 
-最终需要限制范围：
+取值范围：
 
 ```text
-ShortTrendScore = clamp(ShortTrendScore, 0, 100)
+0 ~ 90
 ```
 
-权重设计：
+### 6.2 正向归一化分
 
-| 模块        |  分值 |
-| --------- | --: |
-| MA 短线趋势   |  30 |
-| BOLL 价格位置 |  20 |
-| VOL 量能确认  |  15 |
-| RSI 短线动能  |  15 |
-| BIAS 偏离修正 |  10 |
-| ATR 风险扣分  | -10 |
-| 合计        | 100 |
+```text
+positiveNormalizedScore = positiveRawScore / 90 * 100
+```
 
-说明：
+取值范围：
 
-相比原始方案，VOL 不建议设置为 25 分。
-成交量对 ETF 有参考价值，但容易受到套利交易、申赎、大资金调仓、市场整体活跃度等因素影响。
-因此 VOL 更适合作为确认因子，不适合作为和 MA 同权重的核心趋势因子。
+```text
+0 ~ 100
+```
+
+### 6.3 扣除 ATR 风险分
+
+```text
+rawScore = positiveNormalizedScore - ATR_RISK_DEDUCT
+```
+
+### 6.4 最终得分
+
+```text
+ShortTrendScore = clamp(rawScore, 0, 100)
+```
+
+完整公式：
+
+```text
+ShortTrendScore = clamp(
+  (MA_SCORE + VOL_SCORE + BOLL_SCORE + BIAS_SCORE + RSI_SCORE) / 90 * 100
+  - ATR_RISK_DEDUCT,
+  0,
+  100
+)
+```
 
 ---
 
-## 5. 输入数据要求
+## 7. 输入数据要求
 
 至少需要最近 60 个交易日的日线数据。
 
@@ -189,9 +277,9 @@ dataSufficient = false
 
 ---
 
-## 6. 指标计算
+## 8. 指标计算
 
-### 6.1 MA
+### 8.1 MA
 
 计算：
 
@@ -212,12 +300,13 @@ MA5_SLOPE_3 =
 
 ```text
 MA5 用于短线灵敏度；
-MA10、MA20 用于防止单日反抽误判。
+MA10、MA20 用于防止单日反抽误判；
+MA5_SLOPE_3 用于判断短线趋势是否正在增强。
 ```
 
 ---
 
-### 6.2 VOL
+### 8.2 VOL
 
 计算：
 
@@ -233,9 +322,16 @@ VOL_RATIO_1_5 = todayVolume / VOL5
 VOL_RATIO_5_20 = VOL5 / VOL20
 ```
 
+说明：
+
+```text
+VOL_RATIO_1_5 用于判断今日是否明显放量；
+VOL_RATIO_5_20 用于判断短期成交量中枢是否抬升。
+```
+
 ---
 
-### 6.3 BOLL
+### 8.3 BOLL
 
 默认参数：
 
@@ -269,12 +365,13 @@ BOLL_POSITION = clamp(BOLL_POSITION, 0, 1)
 
 ```text
 BOLL_POSITION 越接近 1，说明越靠近上轨；
-BOLL_POSITION 越接近 0，说明越靠近下轨。
+BOLL_POSITION 越接近 0，说明越靠近下轨；
+对于宽基和行业 ETF，处于 0.60 ~ 0.90 通常代表短线偏强但尚未极端过热。
 ```
 
 ---
 
-### 6.4 BIAS
+### 8.4 BIAS
 
 计算：
 
@@ -286,12 +383,13 @@ BIAS5 = (close - MA5) / MA5
 
 ```text
 BIAS5 > 0 表示价格在 MA5 上方；
-BIAS5 < 0 表示价格在 MA5 下方。
+BIAS5 < 0 表示价格在 MA5 下方；
+BIAS5 过高说明短线追高风险上升。
 ```
 
 ---
 
-### 6.5 RSI
+### 8.5 RSI
 
 计算：
 
@@ -303,11 +401,12 @@ RSI6
 
 ```text
 RSI6 用于判断短线动能。
+RSI6 不单独作为买卖依据，只用于趋势强弱和过热风险识别。
 ```
 
 ---
 
-### 6.6 ATR
+### 8.6 ATR
 
 计算：
 
@@ -326,15 +425,16 @@ ATR_EXPANSION_RATIO = ATR14 / ATR20_AVG
 
 ```text
 ATR_EXPANSION_RATIO 越大，说明当前波动相对过去一段时间明显放大。
+行业/主题 ETF 的 ATR 放大更常见，因此 ATR 只作为风险扣分项，不作为趋势加分项。
 ```
 
 ---
 
-## 7. 分项评分规则
+## 9. 分项评分规则
 
 ---
 
-## 7.1 MA_SCORE，满分 30
+### 9.1 MA_SCORE，满分 30
 
 评分规则：
 
@@ -364,7 +464,7 @@ MA5 斜率向上代表趋势正在增强；
 
 ---
 
-## 7.2 VOL_SCORE，满分 15
+### 9.2 VOL_SCORE，满分 15
 
 评分规则：
 
@@ -384,12 +484,13 @@ else:
 ```text
 放量上涨是短线趋势确认；
 短期成交量明显高于5日均量，说明资金参与度提升；
-但成交量不应和价格趋势同等重要，所以权重控制在15分。
+但成交量容易受到套利交易、申赎、大资金调仓、市场整体活跃度等因素影响；
+因此 VOL 更适合作为确认因子，不适合作为核心趋势因子。
 ```
 
 ---
 
-## 7.3 BOLL_SCORE，满分 20
+### 9.3 BOLL_SCORE，满分 20
 
 评分规则：
 
@@ -417,7 +518,7 @@ else:
 
 ---
 
-## 7.4 BIAS_SCORE，满分 10
+### 9.4 BIAS_SCORE，满分 10
 
 评分规则：
 
@@ -446,7 +547,7 @@ else:
 
 ---
 
-## 7.5 RSI_SCORE，满分 15
+### 9.5 RSI_SCORE，满分 15
 
 评分规则：
 
@@ -473,7 +574,7 @@ RSI6 低于 40，说明短线动能较弱。
 
 ---
 
-## 7.6 ATR_RISK_DEDUCT，最多扣 10 分
+### 9.6 ATR_RISK_DEDUCT，最多扣 10 分
 
 评分规则：
 
@@ -498,27 +599,9 @@ ATR 是风险扣分项，不是趋势加分项。
 
 ---
 
-## 8. 最终评分计算
+## 10. 趋势等级
 
-```text
-rawScore =
-MA_SCORE
-+ VOL_SCORE
-+ BOLL_SCORE
-+ BIAS_SCORE
-+ RSI_SCORE
-- ATR_RISK_DEDUCT
-```
-
-最终：
-
-```text
-ShortTrendScore = clamp(rawScore, 0, 100)
-```
-
----
-
-## 9. 趋势等级
+等级划分：
 
 ```text
 if ShortTrendScore >= 85 and ATR_RISK_DEDUCT == 0:
@@ -538,9 +621,26 @@ else:
     TrendName = "短线转弱"
 ```
 
+等级含义：
+
+| 分数区间 | 等级 | 含义 |
+|---:|---|---|
+| `>= 85 且 ATR_RISK_DEDUCT = 0` | 强势进攻区 | 趋势、位置、动能、量能均较强，且波动未明显放大 |
+| `>= 75` | 短线上升趋势 | 多头结构较明显，但可能存在局部过热、量能不足或波动放大 |
+| `>= 60` | 震荡偏强 | 有一定强势特征，但趋势确认不足 |
+| `>= 45` | 震荡观察 | 趋势不清晰，适合观察和复核 |
+| `< 45` | 短线转弱 | 均线、动能或位置明显走弱，短线风险上升 |
+
+重要说明：
+
+```text
+只有 ShortTrendScore >= 85 且 ATR_RISK_DEDUCT == 0 时，才允许标记为“强势进攻区”。
+如果 ShortTrendScore >= 85 但 ATR_RISK_DEDUCT > 0，应降级为“短线上升趋势”，并输出 ATR 风险标签。
+```
+
 ---
 
-## 10. 趋势标签
+## 11. 趋势标签
 
 输出 `tags` 数组，用于解释评分原因。
 
@@ -584,15 +684,25 @@ if dataSufficient == false:
     add "数据不足"
 ```
 
+宽基 ETF 和行业/主题 ETF 可共用上述标签。
+
+行业/主题 ETF 的标签解释需要更谨慎：
+
+```text
+行业/主题 ETF 波动更大，出现“ATR波动放大”“放量急涨”“RSI短线过热”时，不应直接输出追涨结论。
+```
+
 ---
 
-## 11. 输出结构建议
+## 12. 输出结构建议
 
 ```json
 {
   "symbol": "510300",
+  "name": "沪深300ETF",
+  "etfType": "BROAD_BASED",
   "tradeDate": "2026-06-23",
-  "shortTrendScore": 78.0,
+  "shortTrendScore": 78.11,
   "trendLevel": "UPTREND",
   "trendName": "短线上升趋势",
   "dataSufficient": true,
@@ -602,7 +712,10 @@ if dataSufficient == false:
     "bollScore": 20,
     "biasScore": 8,
     "rsiScore": 10,
-    "atrRiskDeduct": 7
+    "positiveRawScore": 75,
+    "positiveNormalizedScore": 83.33,
+    "atrRiskDeduct": 5.22,
+    "shortTrendScore": 78.11
   },
   "indicators": {
     "close": 4.125,
@@ -631,11 +744,22 @@ if dataSufficient == false:
 }
 ```
 
+`etfType` 建议使用枚举：
+
+```text
+BROAD_BASED      宽基 ETF
+INDUSTRY_THEME   行业/主题 ETF
+CROSS_BORDER     跨境 / QDII ETF
+COMMODITY_GOLD   商品 / 黄金 ETF
+BOND             债券 ETF
+MONEY            货币 / 现金类 ETF
+```
+
 ---
 
-## 12. 实现注意事项
+## 13. 实现注意事项
 
-### 12.1 数据排序
+### 13.1 数据排序
 
 输入 K 线必须按交易日期升序排序。
 
@@ -647,7 +771,7 @@ oldest -> newest
 
 ---
 
-### 12.2 缺失数据处理
+### 13.2 缺失数据处理
 
 如果某项指标无法计算：
 
@@ -681,12 +805,13 @@ dataSufficient = false
 
 ---
 
-### 12.3 除零保护
+### 13.3 除零保护
 
 以下情况必须做保护：
 
 ```text
 MA5 == 0
+MA5_3_days_ago == 0
 VOL5 == 0
 VOL20 == 0
 BOLL_UPPER == BOLL_LOWER
@@ -703,18 +828,43 @@ close == 0
 
 ---
 
-### 12.4 分数精度
+### 13.4 分数精度
 
 建议：
 
 ```text
 内部计算使用 double；
-最终输出保留 2 位小数。
+中间分数保留足够精度；
+最终 ShortTrendScore 输出保留 2 位小数。
 ```
 
 ---
 
-## 13. Java 伪代码
+### 13.5 ATR 扣分必须在归一化之后执行
+
+正确顺序：
+
+```text
+先计算 positiveRawScore
+再计算 positiveNormalizedScore = positiveRawScore / 90 * 100
+最后执行 ShortTrendScore = positiveNormalizedScore - ATR_RISK_DEDUCT
+```
+
+错误顺序：
+
+```text
+ShortTrendScore = MA_SCORE + VOL_SCORE + BOLL_SCORE + BIAS_SCORE + RSI_SCORE - ATR_RISK_DEDUCT
+```
+
+原因：
+
+```text
+正向指标合计最高只有 90 分，如果不归一化，会导致最高分只有 90 分，强势进攻区会过窄。
+```
+
+---
+
+## 14. Java 伪代码
 
 ```java
 public ShortTrendScoreResult calculateShortTrendScore(List<KLine> klines) {
@@ -728,15 +878,26 @@ public ShortTrendScoreResult calculateShortTrendScore(List<KLine> klines) {
     // 8. 计算 RSI6
     // 9. 计算 ATR14、ATR20_AVG、ATR_EXPANSION_RATIO
     // 10. 分别计算 MA_SCORE、VOL_SCORE、BOLL_SCORE、BIAS_SCORE、RSI_SCORE、ATR_RISK_DEDUCT
-    // 11. 汇总 ShortTrendScore
-    // 12. 生成 TrendLevel、TrendName、tags
-    // 13. 返回 ShortTrendScoreResult
+    // 11. 计算 positiveRawScore
+    // 12. 计算 positiveNormalizedScore = positiveRawScore / 90.0 * 100.0
+    // 13. 计算 shortTrendScore = clamp(positiveNormalizedScore - atrRiskDeduct, 0, 100)
+    // 14. 生成 TrendLevel、TrendName、tags
+    // 15. 返回 ShortTrendScoreResult
 }
+```
+
+核心计算示例：
+
+```java
+double positiveRawScore = maScore + volScore + bollScore + biasScore + rsiScore;
+double positiveNormalizedScore = positiveRawScore / 90.0 * 100.0;
+double rawScore = positiveNormalizedScore - atrRiskDeduct;
+double shortTrendScore = clamp(rawScore, 0.0, 100.0);
 ```
 
 ---
 
-## 14. 使用建议
+## 15. 使用建议
 
 ```text
 ShortTrendScore >= 75:
@@ -744,6 +905,9 @@ ShortTrendScore >= 75:
 
 ShortTrendScore >= 85 and ATR_RISK_DEDUCT == 0:
     标记为强势进攻状态
+
+ShortTrendScore >= 85 and ATR_RISK_DEDUCT > 0:
+    不标记为强势进攻区，标记为短线上升趋势，并输出波动风险标签
 
 ShortTrendScore < 60:
     不进入短线进攻候选池
@@ -770,11 +934,12 @@ ShortTrendScore < 45:
 波动放大
 不适合追涨
 触发风控复核
+适合继续观察
 ```
 
 ---
 
-## 15. 与 ETF 轮动主模型的关系
+## 16. 与 ETF 轮动主模型的关系
 
 该算法不是 ETF 轮动主排序因子。
 
@@ -810,14 +975,27 @@ MomentumScore =
 + 0.1 * R250_RankScore
 ```
 
+说明：
+
+```text
+对于宽基 ETF，MomentumScore 更适合判断市场主线和指数强弱；
+对于行业/主题 ETF，MomentumScore 更适合判断风格轮动和行业景气交易强弱；
+对于商品/黄金 ETF，MomentumScore 需要结合商品价格和宏观因子解释；
+对于跨境/QDII ETF，MomentumScore 需要结合海外市场、汇率和溢价解释；
+ShortTrendScore 主要负责判断当前短线状态是否健康，不能作为过滤商品、黄金或 QDII 标的的理由。
+```
+
 ---
 
-## 16. 关键结论
+## 17. 关键结论
 
-1. 该算法适合做 ETF 短线趋势评分，不适合单独作为中期轮动主模型。
-2. VOL 不建议给 25 分，建议控制在 15 分，作为趋势确认因子。
-3. MA5 需要结合 MA10、MA20，否则容易把单日反抽误判为趋势转强。
-4. BOLL 接近上轨不应直接视为卖点，应结合 RSI、BIAS、ATR 判断是否过热。
-5. RSI6 超过 85 不建议直接归零，可降低分数并输出“RSI短线过热”标签。
-6. “低于 50 分必须清仓”不建议写入系统，应改为“触发持仓复核或风控提示”。
-7. 最终系统输出应是分析与风险提示，不应输出绝对买卖指令。
+1. 当前模型适合所有纳入 ETFMate universe 的场内 ETF/LOF/基金类标的做短线趋势评分，包括商品、黄金、跨境/QDII、债券和货币 ETF。
+2. 商品、黄金、跨境/QDII、债券和货币 ETF 不得因类型被过滤；只是在解释、流动性阈值、仓位动作和风险提示上需要分层。
+3. 正向指标 MA、VOL、BOLL、BIAS、RSI 合计最高只有 90 分，必须归一化到 100 分制。
+4. 正确公式为：`ShortTrendScore = clamp(positiveRawScore / 90 * 100 - ATR_RISK_DEDUCT, 0, 100)`。
+5. ATR 是风险扣分项，不是趋势加分项，且必须在正向分归一化之后扣除。
+6. VOL 不建议给 25 分，建议控制在 15 分，作为趋势确认因子。
+7. MA5 需要结合 MA10、MA20，否则容易把单日反抽误判为趋势转强。
+8. BOLL 接近上轨不应直接视为卖点，应结合 RSI、BIAS、ATR 判断是否过热。
+9. RSI6 超过 85 不建议直接归零，可降低分数并输出“RSI短线过热”标签。
+10. 最终系统输出应是分析与风险提示，不应输出绝对买卖指令。

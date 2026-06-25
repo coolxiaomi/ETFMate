@@ -2,17 +2,17 @@
 
 ## 1. 目标
 
-本文档定义一套基于 `ShortTrendScore` 的仓位决策算法，用于将 ETF 短线趋势评分转换为：
+本文档定义一套基于 `ShortTrendScore` 的仓位动作算法，用于将 ETF 短线趋势评分转换为：
 
 ```text
 观察
-建仓
 轻仓建仓
+建仓
 持有
 加仓
 持有或减仓
 减仓
-风控复核
+趋势复核
 退出短线仓位
 ```
 
@@ -23,7 +23,7 @@
 短线趋势状态判断
 ETF候选池过滤
 AI分析解释
-风险提示生成
+仓位动作建议
 ```
 
 注意：
@@ -58,7 +58,7 @@ tags
 ```text
 shortTrendScore: 0 ~ 100
 currentPositionRatio: 当前该 ETF 在组合中的仓位比例，范围 0 ~ 1
-tags: 风险标签数组
+tags: 趋势解释标签数组
 ```
 
 示例：
@@ -66,7 +66,7 @@ tags: 风险标签数组
 ```json
 {
   "symbol": "510300",
-  "tradeDate": "2026-06-23",
+  "tradeDate": "2026-06-25",
   "shortTrendScore": 82.5,
   "trendLevel": "UPTREND",
   "trendName": "短线上升趋势",
@@ -75,7 +75,11 @@ tags: 风险标签数组
     "短线均线多头"
   ],
   "scores": {
-    "atrRiskDeduct": 0
+    "maScore": 35,
+    "bollScore": 20,
+    "volScore": 12,
+    "rsiScore": 10,
+    "biasScore": 5
   },
   "indicators": {
     "close": 4.125,
@@ -84,9 +88,17 @@ tags: 风险标签数组
     "ma20": 3.92,
     "bias5": 0.016,
     "rsi6": 76.3,
-    "atrExpansionRatio": 1.1
+    "bollPosition": 0.87,
+    "volRatio1To5": 1.25
   }
 }
+```
+
+说明：
+
+```text
+ATR_RISK_DEDUCT、ATR_EXPANSION_RATIO 不属于本文档的必要输入。
+ATR 后续只用于网格建议或独立波动模块，不参与趋势评分到仓位动作的核心决策。
 ```
 
 ---
@@ -99,8 +111,9 @@ tags: 风险标签数组
 
 ```text
 ShortTrendScore
+    -> 判断是否存在短线追高提示 trendCaution
     -> 计算基础目标仓位 baseTargetPositionRatio
-    -> 根据风险标签调整目标仓位 targetPositionRatio
+    -> 根据 trendCaution 调整目标仓位 targetPositionRatio
     -> 比较当前仓位 currentPositionRatio
     -> 得出仓位动作 positionAction
     -> 计算加仓/减仓比例 adjustRatio
@@ -144,84 +157,91 @@ positionGap 接近 0
 
 ```java
 public enum PositionAction {
-    NO_ACTION,        // 不操作
-    WATCH,            // 观察
-    OPEN,             // 建仓
-    LIGHT_OPEN,       // 轻仓建仓
-    HOLD,             // 持有
-    ADD,              // 加仓
-    HOLD_OR_ADD,      // 持有或加仓
-    HOLD_OR_REDUCE,   // 持有或小幅减仓
-    REDUCE,           // 减仓
-    RISK_REVIEW,      // 风控复核
-    EXIT_SHORT_TERM   // 退出短线仓位
+    NO_ACTION,          // 不操作
+    WATCH,              // 观察
+    LIGHT_OPEN,         // 轻仓建仓
+    OPEN,               // 建仓
+    HOLD,               // 持有
+    ADD,                // 加仓
+    HOLD_OR_ADD,        // 持有或加仓
+    HOLD_OR_REDUCE,     // 持有或小幅减仓
+    REDUCE,             // 减仓
+    TREND_REVIEW,       // 趋势复核
+    EXIT_TREND_POSITION // 退出短线仓位
 }
 ```
 
 中文名称建议：
 
-| 枚举              | 中文名称    |
-| --------------- | ------- |
-| NO_ACTION       | 不操作     |
-| WATCH           | 观察      |
-| OPEN            | 建仓      |
-| LIGHT_OPEN      | 轻仓建仓    |
-| HOLD            | 持有      |
-| ADD             | 加仓      |
-| HOLD_OR_ADD     | 持有或加仓   |
-| HOLD_OR_REDUCE  | 持有或小幅减仓 |
-| REDUCE          | 减仓      |
-| RISK_REVIEW     | 风控复核    |
-| EXIT_SHORT_TERM | 退出短线仓位  |
+| 枚举 | 中文名称 |
+|---|---|
+| NO_ACTION | 不操作 |
+| WATCH | 观察 |
+| LIGHT_OPEN | 轻仓建仓 |
+| OPEN | 建仓 |
+| HOLD | 持有 |
+| ADD | 加仓 |
+| HOLD_OR_ADD | 持有或加仓 |
+| HOLD_OR_REDUCE | 持有或小幅减仓 |
+| REDUCE | 减仓 |
+| TREND_REVIEW | 趋势复核 |
+| EXIT_TREND_POSITION | 退出短线仓位 |
 
 ---
 
-## 5. 风险状态判断
+## 5. 短线追高提示判断
 
-### 5.1 高风险标签
+### 5.1 追高提示标签
 
-如果 `tags` 中包含以下任意标签，则认为存在短线高风险：
+如果 `tags` 中包含以下任意标签，则认为存在短线追高提示：
 
 ```text
 RSI短线过热
 BIAS严重偏离MA5
-ATR波动放大
-放量急涨
 接近或突破布林上轨
+放量急涨
 ```
 
-### 5.2 高风险判断函数
+说明：
+
+```text
+这些标签不改变 ShortTrendScore。
+它们只用于限制继续追高、降低目标仓位或触发人工复核。
+```
+
+### 5.2 追高提示判断函数
 
 ```java
-boolean hasHighRisk(TrendScoreResult result) {
+boolean hasTrendCaution(ShortTrendScoreResult result) {
     return result.getTags().contains("RSI短线过热")
         || result.getTags().contains("BIAS严重偏离MA5")
-        || result.getTags().contains("ATR波动放大")
-        || result.getTags().contains("放量急涨")
-        || result.getTags().contains("接近或突破布林上轨");
+        || result.getTags().contains("接近或突破布林上轨")
+        || result.getTags().contains("放量急涨");
 }
 ```
 
-### 5.3 无高风险定义
+### 5.3 无追高提示定义
 
 ```text
-noHighRisk =
-ATR_RISK_DEDUCT == 0
-and RSI6 <= 85
+noTrendCaution =
+RSI6 <= 85
 and BIAS5 <= 0.06
+and tags 不包含 "RSI短线过热"
+and tags 不包含 "BIAS严重偏离MA5"
+and tags 不包含 "接近或突破布林上轨"
 and tags 不包含 "放量急涨"
-and tags 不包含 "ATR波动放大"
 ```
 
 Java 伪代码：
 
 ```java
-boolean noHighRisk(TrendScoreResult result) {
-    return result.getScores().getAtrRiskDeduct() == 0
-        && result.getIndicators().getRsi6() <= 85
+boolean noTrendCaution(ShortTrendScoreResult result) {
+    return result.getIndicators().getRsi6() <= 85
         && result.getIndicators().getBias5() <= 0.06
-        && !result.getTags().contains("放量急涨")
-        && !result.getTags().contains("ATR波动放大");
+        && !result.getTags().contains("RSI短线过热")
+        && !result.getTags().contains("BIAS严重偏离MA5")
+        && !result.getTags().contains("接近或突破布林上轨")
+        && !result.getTags().contains("放量急涨");
 }
 ```
 
@@ -232,41 +252,47 @@ boolean noHighRisk(TrendScoreResult result) {
 根据 `ShortTrendScore` 先计算基础目标仓位。
 
 ```text
-if ShortTrendScore >= 85 and noHighRisk:
-    baseTargetPositionRatio = 0.60
-else if ShortTrendScore >= 75 and noHighRisk:
-    baseTargetPositionRatio = 0.40
+if ShortTrendScore >= 85:
+    baseTargetPositionRatio = 0.30
+else if ShortTrendScore >= 75:
+    baseTargetPositionRatio = 0.20
 else if ShortTrendScore >= 60:
-    baseTargetPositionRatio = 0.25
-else if ShortTrendScore >= 45:
     baseTargetPositionRatio = 0.10
+else if ShortTrendScore >= 45:
+    baseTargetPositionRatio = 0.05
 else:
     baseTargetPositionRatio = 0.00
 ```
 
 解释：
 
-| ShortTrendScore | 风险状态  | 基础目标仓位 |
-| --------------: | ----- | -----: |
-|           >= 85 | 无明显风险 |    60% |
-|         75 ~ 85 | 无明显风险 |    40% |
-|         60 ~ 75 | 一般趋势  |    25% |
-|         45 ~ 60 | 震荡观察  |    10% |
-|            < 45 | 短线转弱  |     0% |
+| ShortTrendScore | 趋势状态 | 基础目标仓位 |
+|---:|---|---:|
+| >= 85 | 短线强趋势 | 30% |
+| 75 ~ 85 | 短线上升趋势 | 20% |
+| 60 ~ 75 | 震荡偏强 | 10% |
+| 45 ~ 60 | 震荡观察 | 5% |
+| < 45 | 短线转弱 | 0% |
+
+说明：
+
+```text
+这里的目标仓位是单只 ETF 的规则目标仓位，不是组合总仓位。
+```
 
 ---
 
-## 7. 风险降档规则
+## 7. 追高降档规则
 
-如果存在高风险标签，则目标仓位降低一档。
+如果存在短线追高提示，则目标仓位降低一档。
 
 降档规则：
 
 ```text
-60% -> 40%
-40% -> 25%
-25% -> 10%
-10% -> 0%
+30% -> 20%
+20% -> 10%
+10% -> 5%
+5%  -> 0%
 0%  -> 0%
 ```
 
@@ -274,16 +300,16 @@ Java 伪代码：
 
 ```java
 double downgradeTargetPosition(double baseTargetPositionRatio) {
-    if (baseTargetPositionRatio >= 0.60) {
-        return 0.40;
+    if (baseTargetPositionRatio >= 0.30) {
+        return 0.20;
     }
-    if (baseTargetPositionRatio >= 0.40) {
-        return 0.25;
-    }
-    if (baseTargetPositionRatio >= 0.25) {
+    if (baseTargetPositionRatio >= 0.20) {
         return 0.10;
     }
     if (baseTargetPositionRatio >= 0.10) {
+        return 0.05;
+    }
+    if (baseTargetPositionRatio >= 0.05) {
         return 0.00;
     }
     return 0.00;
@@ -295,7 +321,7 @@ double downgradeTargetPosition(double baseTargetPositionRatio) {
 ```java
 double targetPositionRatio = baseTargetPositionRatio;
 
-if (hasHighRisk(result)) {
+if (hasTrendCaution(result)) {
     targetPositionRatio = downgradeTargetPosition(baseTargetPositionRatio);
 }
 ```
@@ -315,12 +341,12 @@ currentPositionRatio <= 0
 ### 8.1 未持仓动作规则
 
 ```text
-if ShortTrendScore >= 85 and noHighRisk:
+if ShortTrendScore >= 85 and noTrendCaution:
     action = OPEN
-    targetPositionRatio = 0.30
-else if ShortTrendScore >= 75 and noHighRisk:
+    targetPositionRatio = 0.10 ~ 0.15
+else if ShortTrendScore >= 75 and noTrendCaution:
     action = LIGHT_OPEN
-    targetPositionRatio = 0.20
+    targetPositionRatio = 0.05 ~ 0.10
 else:
     action = WATCH
     targetPositionRatio = 0.00
@@ -328,33 +354,29 @@ else:
 
 说明：
 
-未持仓时，即使评分很高，也不建议一次建到 60%。
-
-原因：
-
 ```text
-第一次建仓属于试错仓；
-后续是否加仓，需要等趋势继续确认。
+未持仓时，即使评分很高，也不建议一次建到目标满仓。
+第一次建仓属于试错仓；后续是否加仓，需要等趋势继续确认。
 ```
 
 ### 8.2 未持仓解释文案
 
-如果 `ShortTrendScore >= 85` 且无高风险：
+如果 `ShortTrendScore >= 85` 且无追高提示：
 
 ```text
-短线趋势较强，且未出现明显过热或波动放大，可进入建仓观察区。建议以初始仓位参与，不建议一次性重仓。
+短线趋势较强，且未出现明显追高提示，可进入建仓观察区。建议以初始仓位参与，不建议一次性重仓。
 ```
 
-如果 `ShortTrendScore >= 75` 且无高风险：
+如果 `ShortTrendScore >= 75` 且无追高提示：
 
 ```text
-短线趋势偏强，可轻仓建仓观察。后续需要继续观察 MA5、量能和 ATR 是否保持稳定。
+短线趋势偏强，可轻仓建仓观察。后续需要继续观察 MA5、量能和短线动能是否保持稳定。
 ```
 
-如果存在高风险标签：
+如果存在追高提示：
 
 ```text
-趋势评分较高，但存在短线过热或波动放大，不适合直接追高，建议等待回踩 MA5 或 MA10 后重新评估。
+趋势评分较高，但存在短线过热或偏离过大，不适合直接追高，建议等待回踩 MA5 或 MA10 后重新评估。
 ```
 
 如果评分低于 75：
@@ -408,7 +430,7 @@ else:
     action = HOLD
 ```
 
-### 9.3 特殊风控场景
+### 9.3 趋势明显转弱场景
 
 如果出现明显转弱：
 
@@ -421,25 +443,13 @@ and MA5 < MA10
 则：
 
 ```text
-action = RISK_REVIEW
-```
-
-如果同时 ATR 明显放大：
-
-```text
-ATR_EXPANSION_RATIO >= 1.5
-```
-
-则：
-
-```text
-action = EXIT_SHORT_TERM
+action = EXIT_TREND_POSITION
 ```
 
 说明：
 
 ```text
-EXIT_SHORT_TERM 表示退出短线仓位或降至观察仓位，不等于系统强制清仓。
+EXIT_TREND_POSITION 表示退出短线仓位或降至观察仓位，不等于系统强制清仓。
 ```
 
 ---
@@ -454,8 +464,8 @@ EXIT_SHORT_TERM 表示退出短线仓位或降至观察仓位，不等于系统�
 ShortTrendScore >= 75
 close > MA5
 MA5 > MA10
-没有 ATR 波动放大
-没有 BIAS 严重偏离
+不存在 BIAS严重偏离MA5
+不存在 放量急涨
 ```
 
 更强加仓条件：
@@ -465,7 +475,7 @@ ShortTrendScore >= 85
 MA5 > MA10 > MA20
 VOL_RATIO_1_5 >= 1.1
 RSI6 <= 85
-ATR_RISK_DEDUCT == 0
+BIAS5 <= 0.06
 ```
 
 ### 10.2 单次最大加仓比例
@@ -473,13 +483,13 @@ ATR_RISK_DEDUCT == 0
 建议：
 
 ```text
-maxAddStepRatio = 0.20
+maxAddStepRatio = 0.10
 ```
 
 也就是：
 
 ```text
-单次最多加 20% 仓位
+单次最多加 10% 仓位
 ```
 
 加仓公式：
@@ -502,37 +512,37 @@ newPositionRatio = min(newPositionRatio, targetPositionRatio)
 
 ### 10.3 阶梯加仓模型
 
-假设单只 ETF 短线最大目标仓位为：
+假设单只 ETF 最大目标仓位为：
 
 ```text
-maxPositionRatio = 0.60
+maxPositionRatio = 0.30
 ```
 
 分层如下：
 
-| 仓位层级 | 仓位比例 | 含义       |
-| ---- | ---: | -------- |
-| 观察仓  |  10% | 试错和跟踪    |
-| 初始仓  |  20% | 趋势初步确认   |
-| 标准仓  |  40% | 趋势较强     |
-| 进攻仓  |  60% | 强趋势且风险可控 |
+| 仓位层级 | 仓位比例 | 含义 |
+|---|---:|---|
+| 观察仓 | 5% | 试错和跟踪 |
+| 初始仓 | 10% | 趋势初步确认 |
+| 标准仓 | 20% | 趋势较强 |
+| 强趋势仓 | 30% | 短线强趋势 |
 
 加仓路径建议：
 
 ```text
 当前仓位 = 0%
 score >= 75:
-    建立 10% ~ 20% 初始仓
+    建立 5% ~ 10% 初始仓
+
+当前仓位 = 10%
+score >= 85 且无追高提示:
+    加到 20%
 
 当前仓位 = 20%
-score >= 85 且无高风险:
-    加到 40%
-
-当前仓位 = 40%
 score >= 85 且连续 2 天保持强势:
-    加到 60%
+    加到 30%
 
-当前仓位 >= 60%:
+当前仓位 >= 30%:
     不再加仓
 ```
 
@@ -551,11 +561,9 @@ score >= 85 且连续 2 天保持强势:
 
 ```text
 趋势减仓
-风险减仓
-风控减仓
+过热减仓
+趋势转弱减仓
 ```
-
----
 
 ### 11.1 趋势减仓
 
@@ -570,36 +578,34 @@ ShortTrendScore < 60
 建议：
 
 ```text
-降低到 25% 或更低目标仓位
+降低到 10% 或更低目标仓位
 ```
 
 示例：
 
 ```text
-当前仓位 60%
+当前仓位 30%
 ShortTrendScore = 55
-targetPositionRatio = 25%
+targetPositionRatio = 5% ~ 10%
 本次最多减 30%
-newPositionRatio = 30%
+newPositionRatio 不低于系统目标仓位
 ```
 
----
+### 11.2 过热减仓
 
-### 11.2 风险减仓
-
-如果评分仍高，但出现以下风险标签：
+如果评分仍高，但出现以下标签：
 
 ```text
 RSI短线过热
 BIAS严重偏离MA5
-ATR波动放大
+接近或突破布林上轨
 放量急涨
 ```
 
 说明：
 
 ```text
-趋势没有完全走坏，但短线回撤风险上升。
+趋势没有完全走坏，但短线追高和回撤压力上升。
 ```
 
 处理规则：
@@ -613,23 +619,21 @@ ATR波动放大
 示例：
 
 ```text
-当前仓位 60%
+当前仓位 30%
 ShortTrendScore = 88
 但存在 RSI短线过热 + BIAS严重偏离MA5
-baseTargetPositionRatio = 60%
-targetPositionRatio 降档为 40%
-本次减仓到 40%
+baseTargetPositionRatio = 30%
+targetPositionRatio 降档为 20%
+本次减仓到 20% 或分步接近 20%
 ```
 
 输出文案：
 
 ```text
-强趋势仍在，但短线过热，建议停止加仓。已有较高仓位时，可考虑降低部分进攻仓，等待回踩后再评估。
+强趋势仍在，但短线偏热，建议停止加仓。已有较高仓位时，可考虑降低部分进攻仓，等待回踩后再评估。
 ```
 
----
-
-### 11.3 风控减仓
+### 11.3 趋势转弱减仓
 
 如果出现明显转弱：
 
@@ -642,26 +646,13 @@ MA5 < MA10
 建议：
 
 ```text
-触发风控复核
-降低到观察仓或退出短线仓位
-```
-
-如果同时：
-
-```text
-ATR_EXPANSION_RATIO >= 1.5
-```
-
-则风险进一步提高：
-
-```text
-action = EXIT_SHORT_TERM
+退出短线仓位或降至观察仓位
 ```
 
 输出文案：
 
 ```text
-短线趋势明显转弱，且波动放大，建议退出短线进攻仓位或降至观察仓位，并等待趋势重新确认。
+短线趋势明显转弱，建议退出短线仓位或降至观察仓位，并等待趋势重新确认。
 ```
 
 ---
@@ -674,7 +665,7 @@ action = EXIT_SHORT_TERM
 maxReduceStepRatio = 0.30
 ```
 
-严重风控减仓：
+趋势明显转弱减仓：
 
 ```text
 maxReduceStepRatio = 0.50
@@ -683,7 +674,7 @@ maxReduceStepRatio = 0.50
 判断：
 
 ```text
-if ShortTrendScore < 45 and close < MA5 and MA5 < MA10 and ATR_EXPANSION_RATIO >= 1.5:
+if ShortTrendScore < 45 and close < MA5 and MA5 < MA10:
     maxReduceStepRatio = 0.50
 else:
     maxReduceStepRatio = 0.30
@@ -710,12 +701,12 @@ newPositionRatio = max(newPositionRatio, 0)
 
 ---
 
-## 13. 操作建议等级
+## 13. 趋势提示等级
 
-建议输出一个风险等级 `riskLevel`。
+建议输出一个趋势提示等级 `trendAlertLevel`。
 
 ```java
-public enum RiskLevel {
+public enum TrendAlertLevel {
     LOW,
     MEDIUM,
     HIGH
@@ -725,16 +716,16 @@ public enum RiskLevel {
 判断规则：
 
 ```text
-if tags 包含 "ATR波动放大"
-   or tags 包含 "BIAS严重偏离MA5"
-   or ShortTrendScore < 45:
-    riskLevel = HIGH
-else if tags 包含 "RSI短线过热"
+if ShortTrendScore < 45
+   or tags 包含 "BIAS严重偏离MA5":
+    trendAlertLevel = HIGH
+else if ShortTrendScore < 60
+   or tags 包含 "RSI短线过热"
    or tags 包含 "接近或突破布林上轨"
-   or ShortTrendScore < 60:
-    riskLevel = MEDIUM
+   or tags 包含 "放量急涨":
+    trendAlertLevel = MEDIUM
 else:
-    riskLevel = LOW
+    trendAlertLevel = LOW
 ```
 
 ---
@@ -744,21 +735,21 @@ else:
 ```text
 1. 接收 ShortTrendScoreResult 和 currentPositionRatio
 2. 判断是否持仓
-3. 判断 noHighRisk / hasHighRisk
-4. 如果未持仓：
-   4.1 根据评分和风险状态生成 WATCH / LIGHT_OPEN / OPEN
-   4.2 设置初始 targetPositionRatio
-5. 如果已持仓：
-   5.1 根据评分计算 baseTargetPositionRatio
-   5.2 如果存在高风险标签，则目标仓位降档
-   5.3 计算 positionGap
-   5.4 根据 positionGap 判断 ADD / HOLD / REDUCE
-   5.5 如果触发严重风控，则覆盖为 RISK_REVIEW 或 EXIT_SHORT_TERM
-6. 计算 adjustRatio
-7. 计算 newPositionRatio
-8. 生成 reasons
-9. 生成 warnings
-10. 返回 PositionDecisionResult
+3. 判断 noTrendCaution / hasTrendCaution
+4. 根据评分计算 baseTargetPositionRatio
+5. 如果存在追高提示，则目标仓位降档
+6. 如果未持仓：
+   6.1 根据评分和追高状态生成 WATCH / LIGHT_OPEN / OPEN
+   6.2 设置初始 targetPositionRatio
+7. 如果已持仓：
+   7.1 计算 positionGap
+   7.2 根据 positionGap 判断 ADD / HOLD / REDUCE
+   7.3 如果趋势明显转弱，则覆盖为 EXIT_TREND_POSITION
+8. 计算 adjustRatio
+9. 计算 newPositionRatio
+10. 生成 reasons
+11. 生成 warnings
+12. 返回 PositionDecisionResult
 ```
 
 ---
@@ -773,22 +764,26 @@ public PositionDecisionResult decidePositionAction(
     double score = trendResult.getShortTrendScore();
 
     boolean holding = currentPositionRatio > 0;
-    boolean noHighRisk = noHighRisk(trendResult);
-    boolean highRisk = hasHighRisk(trendResult);
+    boolean noTrendCaution = noTrendCaution(trendResult);
+    boolean trendCaution = hasTrendCaution(trendResult);
 
-    double targetPositionRatio;
+    double baseTargetPositionRatio = calculateBaseTargetPosition(score);
+    double targetPositionRatio = trendCaution
+            ? downgradeTargetPosition(baseTargetPositionRatio)
+            : baseTargetPositionRatio;
+
     PositionAction action;
     double adjustRatio = 0.0;
     double newPositionRatio = currentPositionRatio;
 
     // 未持仓场景
     if (!holding) {
-        if (score >= 85 && noHighRisk) {
+        if (score >= 85 && noTrendCaution) {
             action = PositionAction.OPEN;
-            targetPositionRatio = 0.30;
-        } else if (score >= 75 && noHighRisk) {
+            targetPositionRatio = Math.min(targetPositionRatio, 0.15);
+        } else if (score >= 75 && noTrendCaution) {
             action = PositionAction.LIGHT_OPEN;
-            targetPositionRatio = 0.20;
+            targetPositionRatio = Math.min(targetPositionRatio, 0.10);
         } else {
             action = PositionAction.WATCH;
             targetPositionRatio = 0.00;
@@ -802,25 +797,13 @@ public PositionDecisionResult decidePositionAction(
     }
 
     // 已持仓场景
-    double baseTargetPositionRatio = calculateBaseTargetPosition(score, noHighRisk);
-
-    if (highRisk) {
-        targetPositionRatio = downgradeTargetPosition(baseTargetPositionRatio);
-    } else {
-        targetPositionRatio = baseTargetPositionRatio;
-    }
-
     double positionGap = targetPositionRatio - currentPositionRatio;
     double minAdjustRatio = 0.05;
 
-    boolean seriousRisk = isSeriousRisk(trendResult);
+    boolean seriousWeakTrend = isSeriousWeakTrend(trendResult);
 
-    if (seriousRisk) {
-        if (trendResult.getIndicators().getAtrExpansionRatio() >= 1.5) {
-            action = PositionAction.EXIT_SHORT_TERM;
-        } else {
-            action = PositionAction.RISK_REVIEW;
-        }
+    if (seriousWeakTrend) {
+        action = PositionAction.EXIT_TREND_POSITION;
     } else if (Math.abs(positionGap) < minAdjustRatio) {
         action = PositionAction.HOLD;
     } else if (positionGap > 0) {
@@ -830,15 +813,20 @@ public PositionDecisionResult decidePositionAction(
     }
 
     if (action == PositionAction.ADD) {
-        double maxAddStepRatio = 0.20;
-        adjustRatio = Math.min(positionGap, maxAddStepRatio);
-        newPositionRatio = currentPositionRatio + adjustRatio;
-        newPositionRatio = Math.min(newPositionRatio, targetPositionRatio);
+        if (score < 75 || trendCaution || !isAddAllowed(trendResult)) {
+            action = PositionAction.HOLD;
+            adjustRatio = 0.0;
+            newPositionRatio = currentPositionRatio;
+        } else {
+            double maxAddStepRatio = 0.10;
+            adjustRatio = Math.min(positionGap, maxAddStepRatio);
+            newPositionRatio = currentPositionRatio + adjustRatio;
+            newPositionRatio = Math.min(newPositionRatio, targetPositionRatio);
+        }
     } else if (action == PositionAction.REDUCE
-            || action == PositionAction.RISK_REVIEW
-            || action == PositionAction.EXIT_SHORT_TERM) {
+            || action == PositionAction.EXIT_TREND_POSITION) {
 
-        double maxReduceStepRatio = seriousRisk ? 0.50 : 0.30;
+        double maxReduceStepRatio = seriousWeakTrend ? 0.50 : 0.30;
         double reduceGap = Math.max(0, currentPositionRatio - targetPositionRatio);
         adjustRatio = Math.min(reduceGap, maxReduceStepRatio);
         newPositionRatio = currentPositionRatio - adjustRatio;
@@ -858,47 +846,47 @@ public PositionDecisionResult decidePositionAction(
 ### 16.1 基础目标仓位
 
 ```java
-double calculateBaseTargetPosition(double score, boolean noHighRisk) {
-    if (score >= 85 && noHighRisk) {
-        return 0.60;
+double calculateBaseTargetPosition(double score) {
+    if (score >= 85) {
+        return 0.30;
     }
-    if (score >= 75 && noHighRisk) {
-        return 0.40;
+    if (score >= 75) {
+        return 0.20;
     }
     if (score >= 60) {
-        return 0.25;
+        return 0.10;
     }
     if (score >= 45) {
-        return 0.10;
+        return 0.05;
     }
     return 0.00;
 }
 ```
 
-### 16.2 风险降档
+### 16.2 趋势追高降档
 
 ```java
 double downgradeTargetPosition(double baseTargetPositionRatio) {
-    if (baseTargetPositionRatio >= 0.60) {
-        return 0.40;
+    if (baseTargetPositionRatio >= 0.30) {
+        return 0.20;
     }
-    if (baseTargetPositionRatio >= 0.40) {
-        return 0.25;
-    }
-    if (baseTargetPositionRatio >= 0.25) {
+    if (baseTargetPositionRatio >= 0.20) {
         return 0.10;
     }
     if (baseTargetPositionRatio >= 0.10) {
+        return 0.05;
+    }
+    if (baseTargetPositionRatio >= 0.05) {
         return 0.00;
     }
     return 0.00;
 }
 ```
 
-### 16.3 严重风险判断
+### 16.3 趋势明显转弱判断
 
 ```java
-boolean isSeriousRisk(ShortTrendScoreResult result) {
+boolean isSeriousWeakTrend(ShortTrendScoreResult result) {
     double score = result.getShortTrendScore();
     double close = result.getIndicators().getClose();
     double ma5 = result.getIndicators().getMa5();
@@ -910,6 +898,27 @@ boolean isSeriousRisk(ShortTrendScoreResult result) {
 }
 ```
 
+### 16.4 加仓允许判断
+
+```java
+boolean isAddAllowed(ShortTrendScoreResult result) {
+    double score = result.getShortTrendScore();
+    double close = result.getIndicators().getClose();
+    double ma5 = result.getIndicators().getMa5();
+    double ma10 = result.getIndicators().getMa10();
+    double bias5 = result.getIndicators().getBias5();
+    double rsi6 = result.getIndicators().getRsi6();
+
+    return score >= 75
+        && close > ma5
+        && ma5 > ma10
+        && bias5 <= 0.06
+        && rsi6 <= 85
+        && !result.getTags().contains("放量急涨")
+        && !result.getTags().contains("BIAS严重偏离MA5");
+}
+```
+
 ---
 
 ## 17. 输出结构建议
@@ -917,29 +926,28 @@ boolean isSeriousRisk(ShortTrendScoreResult result) {
 ```json
 {
   "symbol": "510300",
-  "tradeDate": "2026-06-23",
+  "tradeDate": "2026-06-25",
   "shortTrendScore": 82.5,
   "trendLevel": "UPTREND",
   "trendName": "短线上升趋势",
 
   "currentPositionRatio": 0.20,
-  "targetPositionRatio": 0.40,
-  "newPositionRatio": 0.40,
-  "adjustRatio": 0.20,
+  "targetPositionRatio": 0.20,
+  "newPositionRatio": 0.20,
+  "adjustRatio": 0.00,
 
-  "positionAction": "ADD",
-  "actionName": "加仓",
-  "riskLevel": "LOW",
+  "positionAction": "HOLD",
+  "actionName": "持有",
+  "trendAlertLevel": "LOW",
 
   "reasons": [
     "短线趋势评分高于75，趋势处于上升状态",
-    "价格位于MA5上方，且MA5高于MA10",
-    "未出现ATR波动放大",
-    "目标仓位高于当前仓位，允许分步加仓"
+    "当前仓位与目标仓位基本匹配",
+    "未出现严重短线追高提示"
   ],
   "warnings": [
     "该建议仅为趋势评分结果，不构成交易指令",
-    "加仓后仍需观察成交量、MA5和ATR变化"
+    "后续仍需观察MA5、量能和RSI变化"
   ],
   "tags": [
     "短线均线多头"
@@ -954,13 +962,13 @@ boolean isSeriousRisk(ShortTrendScoreResult result) {
 ### 18.1 OPEN
 
 ```text
-短线趋势较强，且未出现明显过热或波动放大，可进入建仓观察区。建议以初始仓位参与，不建议一次性重仓。
+短线趋势较强，且未出现明显追高提示，可进入建仓观察区。建议以初始仓位参与，不建议一次性重仓。
 ```
 
 ### 18.2 LIGHT_OPEN
 
 ```text
-短线趋势偏强，可轻仓建仓观察。后续需要继续观察 MA5、量能和 ATR 是否保持稳定。
+短线趋势偏强，可轻仓建仓观察。后续需要继续观察 MA5、量能和短线动能是否保持稳定。
 ```
 
 ### 18.3 WATCH
@@ -984,19 +992,19 @@ boolean isSeriousRisk(ShortTrendScoreResult result) {
 ### 18.6 REDUCE
 
 ```text
-当前目标仓位低于实际仓位，说明短线趋势或风险状态发生变化，建议降低部分仓位。
+当前目标仓位低于实际仓位，说明短线趋势强度下降或存在短线追高压力，建议降低部分仓位。
 ```
 
-### 18.7 RISK_REVIEW
+### 18.7 TREND_REVIEW
 
 ```text
-短线趋势明显转弱，建议触发持仓复核，降低短线进攻仓位。
+短线趋势出现异常变化，建议触发持仓复核，降低短线进攻仓位。
 ```
 
-### 18.8 EXIT_SHORT_TERM
+### 18.8 EXIT_TREND_POSITION
 
 ```text
-短线趋势转弱且波动风险放大，建议退出短线进攻仓位或降至观察仓位，等待趋势重新确认。
+短线趋势明显转弱，建议退出短线仓位或降至观察仓位，等待趋势重新确认。
 ```
 
 ---
@@ -1024,8 +1032,8 @@ boolean isSeriousRisk(ShortTrendScoreResult result) {
 可轻仓参与
 可分步加仓
 建议降低仓位
-触发风控复核
-不适合追涨
+触发趋势复核
+不适合追高
 等待趋势重新确认
 ```
 
@@ -1036,11 +1044,11 @@ boolean isSeriousRisk(ShortTrendScoreResult result) {
 ### 20.1 未持仓
 
 ```text
-ShortTrendScore >= 85 且无高风险:
-    可建 20% ~ 30%
+ShortTrendScore >= 85 且无追高提示:
+    可建 10% ~ 15%
 
-ShortTrendScore >= 75 且无高风险:
-    可建 10% ~ 20%
+ShortTrendScore >= 75 且无追高提示:
+    可建 5% ~ 10%
 
 ShortTrendScore < 75:
     观察
@@ -1049,26 +1057,26 @@ ShortTrendScore < 75:
 ### 20.2 已持仓
 
 ```text
-ShortTrendScore >= 85 且无高风险:
-    目标仓位 60%
+ShortTrendScore >= 85:
+    目标仓位 30%
 
-ShortTrendScore >= 75 且无高风险:
-    目标仓位 40%
+ShortTrendScore >= 75:
+    目标仓位 20%
 
 ShortTrendScore >= 60:
-    目标仓位 25%
+    目标仓位 10%
 
 ShortTrendScore >= 45:
-    目标仓位 10%
+    目标仓位 5%
 
 ShortTrendScore < 45:
     目标仓位 0%
 ```
 
-### 20.3 风险降档
+### 20.3 追高降档
 
 ```text
-存在 RSI短线过热 / BIAS严重偏离MA5 / ATR波动放大 / 放量急涨:
+存在 RSI短线过热 / BIAS严重偏离MA5 / 接近或突破布林上轨 / 放量急涨:
     目标仓位降低一档
 ```
 
@@ -1088,9 +1096,9 @@ targetPositionRatio < currentPositionRatio:
 ### 20.5 单次调整上限
 
 ```text
-单次最大加仓比例: 20%
+单次最大加仓比例: 10%
 普通单次最大减仓比例: 30%
-严重风控单次最大减仓比例: 50%
+趋势明显转弱单次最大减仓比例: 50%
 ```
 
 ---
@@ -1100,7 +1108,7 @@ targetPositionRatio < currentPositionRatio:
 1. `ShortTrendScore` 不直接等于买卖信号，应先转换为目标仓位。
 2. 加仓和减仓的核心依据是 `targetPositionRatio - currentPositionRatio`。
 3. 未持仓时，即使评分很高，也建议先建立初始仓，不建议直接重仓。
-4. 已持仓时，评分高且无风险，可以逐步加仓；评分下降或风险升高，应降低目标仓位。
-5. RSI 过热、BIAS 偏离、ATR 放大、放量急涨时，不应继续加仓，目标仓位应降低一档。
-6. 单次加仓和减仓都需要设置上限，避免系统因单日波动频繁大幅调整。
+4. 已持仓时，评分高且无追高提示，可以逐步加仓；评分下降或出现追高提示，应降低目标仓位。
+5. RSI 过热、BIAS 偏离、接近布林上轨、放量急涨时，不应继续加仓，目标仓位应降低一档。
+6. ATR 不参与本文档决策；ATR 后续只进入网格建议或独立波动模块。
 7. 系统输出应是“建议”和“风险提示”，不应输出绝对化交易指令。

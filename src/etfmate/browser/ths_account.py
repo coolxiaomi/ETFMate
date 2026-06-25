@@ -111,7 +111,7 @@ def collect(root: Path, out_dir: Path) -> dict:
             "filtered": len(filtered),
             "source_url": watchlist_source_url,
             "canonical_url": THS_WATCHLIST_URL,
-            "note": "仅从同花顺投资账本自选页提取 ETF 池；排除持仓缓存，按 ETF/LOF/场内基金规则过滤",
+            "note": "仅从同花顺投资账本自选页提取 ETF 池；排除持仓缓存，保留 ETF/LOF/场内基金及商品/黄金/QDII 等场内基金标的",
         },
         "snapshot": snapshot,
         "closed_snapshot": closed_snapshot,
@@ -308,6 +308,11 @@ def _watch_item_filter(item: dict) -> tuple[bool, str]:
     if _looks_like_otc_fund(code):
         return False, "过滤场外基金/ETF-FOF；仅保留交易所场内基金代码段"
     if _is_fund_code(code):
+        upper_text = text.upper()
+        if any(word in upper_text for word in ("QDII", "NASDAQ", "S&P")) or any(word in text for word in ("纳指", "标普", "恒生", "港股", "中概")):
+            return True, "跨境/QDII 场内基金代码段，纳入分析"
+        if any(word in text for word in ("黄金", "商品", "豆粕", "能源化工", "有色")):
+            return True, "商品/黄金场内基金代码段，纳入分析"
         return True, "场内基金代码段，保留 ETF/LOF/场内基金"
     if any(word in text.upper() for word in ("ETF", "LOF", "REIT")) or any(word in text for word in ("基金", "场内基金")):
         if _is_a_share_stock_code(code):

@@ -231,7 +231,7 @@ def run_report(root: Path, run_id: str) -> None:
                 "label": "同花顺自选ETF池",
                 "count": f"{len(watchlist)} 只，过滤 {len(watchlist_filtered)} 条",
                 "source": "同花顺投资账本自选页/缓存/DOM",
-                "note": "仅保留 ETF、LOF、场内基金；过滤股票、可转债、港股股票和非 ETF 标的",
+                "note": "保留 ETF/LOF/场内基金，含商品、黄金、跨境/QDII 等场内基金标的；仅过滤股票、可转债、港股股票和非场内基金",
             },
             {"label": "Touker 网格", "count": f"{grids_count}（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker", "note": "完整" if grids_count else "无数据"},
             {"label": "行情/K 线", "count": f"{len(snapshots)} 只", "source": "; ".join(sorted(sources)) or "N/A", "note": "由 a-stock-data/本地行情适配器决策"},
