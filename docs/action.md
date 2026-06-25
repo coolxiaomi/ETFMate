@@ -1,4 +1,4 @@
-# ETFMate 短线趋势评分到仓位动作的决策算法
+# ETFMate 短线趋势评分到仓位动作的决策算法（趋势纯净版）
 
 ## 1. 目标
 
@@ -10,7 +10,7 @@
 建仓
 持有
 加仓
-持有或减仓
+持有或小幅减仓
 减仓
 趋势复核
 退出短线仓位
@@ -67,7 +67,7 @@ tags: 趋势解释标签数组
 {
   "symbol": "510300",
   "tradeDate": "2026-06-25",
-  "shortTrendScore": 82.5,
+  "shortTrendScore": 82.0,
   "trendLevel": "UPTREND",
   "trendName": "短线上升趋势",
   "currentPositionRatio": 0.20,
@@ -75,11 +75,11 @@ tags: 趋势解释标签数组
     "短线均线多头"
   ],
   "scores": {
-    "maScore": 35,
+    "maScore": 30,
     "bollScore": 20,
     "volScore": 12,
-    "rsiScore": 10,
-    "biasScore": 5
+    "rsiScore": 14,
+    "biasScore": 6
   },
   "indicators": {
     "close": 4.125,
@@ -125,29 +125,13 @@ ShortTrendScore
 positionGap = targetPositionRatio - currentPositionRatio
 ```
 
-如果：
+含义：
 
 ```text
-positionGap > 0
+positionGap > 0：目标仓位高于当前仓位，可考虑加仓
+positionGap < 0：目标仓位低于当前仓位，可考虑减仓
+positionGap 接近 0：当前仓位基本合理，继续持有或不操作
 ```
-
-说明目标仓位高于当前仓位，可以加仓。
-
-如果：
-
-```text
-positionGap < 0
-```
-
-说明目标仓位低于当前仓位，需要减仓。
-
-如果：
-
-```text
-positionGap 接近 0
-```
-
-说明当前仓位基本合理，继续持有或不操作。
 
 ---
 
@@ -157,17 +141,16 @@ positionGap 接近 0
 
 ```java
 public enum PositionAction {
-    NO_ACTION,          // 不操作
-    WATCH,              // 观察
-    LIGHT_OPEN,         // 轻仓建仓
-    OPEN,               // 建仓
-    HOLD,               // 持有
-    ADD,                // 加仓
-    HOLD_OR_ADD,        // 持有或加仓
-    HOLD_OR_REDUCE,     // 持有或小幅减仓
-    REDUCE,             // 减仓
-    TREND_REVIEW,       // 趋势复核
-    EXIT_TREND_POSITION // 退出短线仓位
+    NO_ACTION,             // 不操作
+    WATCH,                 // 观察
+    LIGHT_OPEN,            // 轻仓建仓
+    OPEN,                  // 建仓
+    HOLD,                  // 持有
+    ADD,                   // 加仓
+    HOLD_OR_REDUCE,        // 持有或小幅减仓
+    REDUCE,                // 减仓
+    TREND_REVIEW,          // 趋势复核
+    EXIT_TREND_POSITION    // 退出短线仓位
 }
 ```
 
@@ -181,7 +164,6 @@ public enum PositionAction {
 | OPEN | 建仓 |
 | HOLD | 持有 |
 | ADD | 加仓 |
-| HOLD_OR_ADD | 持有或加仓 |
 | HOLD_OR_REDUCE | 持有或小幅减仓 |
 | REDUCE | 减仓 |
 | TREND_REVIEW | 趋势复核 |
@@ -502,11 +484,6 @@ addRatio = min(positionGap, maxAddStepRatio)
 
 ```text
 newPositionRatio = currentPositionRatio + addRatio
-```
-
-需要限制：
-
-```text
 newPositionRatio = min(newPositionRatio, targetPositionRatio)
 ```
 
@@ -586,7 +563,7 @@ ShortTrendScore < 60
 ```text
 当前仓位 30%
 ShortTrendScore = 55
-targetPositionRatio = 5% ~ 10%
+targetPositionRatio = 5%
 本次最多减 30%
 newPositionRatio 不低于系统目标仓位
 ```
@@ -613,7 +590,7 @@ BIAS严重偏离MA5
 ```text
 停止加仓
 目标仓位降低一档
-已有高仓位时，可减掉部分进攻仓
+已有高仓位时，可减掉部分强趋势仓
 ```
 
 示例：
@@ -625,12 +602,6 @@ ShortTrendScore = 88
 baseTargetPositionRatio = 30%
 targetPositionRatio 降档为 20%
 本次减仓到 20% 或分步接近 20%
-```
-
-输出文案：
-
-```text
-强趋势仍在，但短线偏热，建议停止加仓。已有较高仓位时，可考虑降低部分进攻仓，等待回踩后再评估。
 ```
 
 ### 11.3 趋势转弱减仓
@@ -690,11 +661,6 @@ reduceRatio = min(abs(positionGap), maxReduceStepRatio)
 
 ```text
 newPositionRatio = currentPositionRatio - reduceRatio
-```
-
-需要限制：
-
-```text
 newPositionRatio = max(newPositionRatio, targetPositionRatio)
 newPositionRatio = max(newPositionRatio, 0)
 ```
@@ -776,7 +742,6 @@ public PositionDecisionResult decidePositionAction(
     double adjustRatio = 0.0;
     double newPositionRatio = currentPositionRatio;
 
-    // 未持仓场景
     if (!holding) {
         if (score >= 85 && noTrendCaution) {
             action = PositionAction.OPEN;
@@ -796,10 +761,8 @@ public PositionDecisionResult decidePositionAction(
                 newPositionRatio, action, adjustRatio);
     }
 
-    // 已持仓场景
     double positionGap = targetPositionRatio - currentPositionRatio;
     double minAdjustRatio = 0.05;
-
     boolean seriousWeakTrend = isSeriousWeakTrend(trendResult);
 
     if (seriousWeakTrend) {
@@ -927,7 +890,7 @@ boolean isAddAllowed(ShortTrendScoreResult result) {
 {
   "symbol": "510300",
   "tradeDate": "2026-06-25",
-  "shortTrendScore": 82.5,
+  "shortTrendScore": 82.0,
   "trendLevel": "UPTREND",
   "trendName": "短线上升趋势",
 
@@ -957,59 +920,7 @@ boolean isAddAllowed(ShortTrendScoreResult result) {
 
 ---
 
-## 18. 文案生成规则
-
-### 18.1 OPEN
-
-```text
-短线趋势较强，且未出现明显追高提示，可进入建仓观察区。建议以初始仓位参与，不建议一次性重仓。
-```
-
-### 18.2 LIGHT_OPEN
-
-```text
-短线趋势偏强，可轻仓建仓观察。后续需要继续观察 MA5、量能和短线动能是否保持稳定。
-```
-
-### 18.3 WATCH
-
-```text
-短线趋势强度不足，暂不进入建仓区，建议继续观察。
-```
-
-### 18.4 HOLD
-
-```text
-当前仓位与目标仓位基本匹配，短线趋势尚未明显破坏，建议继续观察持有。
-```
-
-### 18.5 ADD
-
-```text
-短线趋势评分较高，且目标仓位高于当前仓位，可按阶梯方式加仓。单次加仓比例不应超过系统设定上限。
-```
-
-### 18.6 REDUCE
-
-```text
-当前目标仓位低于实际仓位，说明短线趋势强度下降或存在短线追高压力，建议降低部分仓位。
-```
-
-### 18.7 TREND_REVIEW
-
-```text
-短线趋势出现异常变化，建议触发持仓复核，降低短线进攻仓位。
-```
-
-### 18.8 EXIT_TREND_POSITION
-
-```text
-短线趋势明显转弱，建议退出短线仓位或降至观察仓位，等待趋势重新确认。
-```
-
----
-
-## 19. 禁止输出文案
+## 18. 禁止输出文案
 
 系统不得输出以下绝对化交易指令：
 
@@ -1039,71 +950,7 @@ boolean isAddAllowed(ShortTrendScoreResult result) {
 
 ---
 
-## 20. 最终建议规则摘要
-
-### 20.1 未持仓
-
-```text
-ShortTrendScore >= 85 且无追高提示:
-    可建 10% ~ 15%
-
-ShortTrendScore >= 75 且无追高提示:
-    可建 5% ~ 10%
-
-ShortTrendScore < 75:
-    观察
-```
-
-### 20.2 已持仓
-
-```text
-ShortTrendScore >= 85:
-    目标仓位 30%
-
-ShortTrendScore >= 75:
-    目标仓位 20%
-
-ShortTrendScore >= 60:
-    目标仓位 10%
-
-ShortTrendScore >= 45:
-    目标仓位 5%
-
-ShortTrendScore < 45:
-    目标仓位 0%
-```
-
-### 20.3 追高降档
-
-```text
-存在 RSI短线过热 / BIAS严重偏离MA5 / 接近或突破布林上轨 / 放量急涨:
-    目标仓位降低一档
-```
-
-### 20.4 加减仓
-
-```text
-targetPositionRatio > currentPositionRatio:
-    加仓
-
-targetPositionRatio ≈ currentPositionRatio:
-    持有
-
-targetPositionRatio < currentPositionRatio:
-    减仓
-```
-
-### 20.5 单次调整上限
-
-```text
-单次最大加仓比例: 10%
-普通单次最大减仓比例: 30%
-趋势明显转弱单次最大减仓比例: 50%
-```
-
----
-
-## 21. 关键结论
+## 19. 关键结论
 
 1. `ShortTrendScore` 不直接等于买卖信号，应先转换为目标仓位。
 2. 加仓和减仓的核心依据是 `targetPositionRatio - currentPositionRatio`。
@@ -1112,3 +959,4 @@ targetPositionRatio < currentPositionRatio:
 5. RSI 过热、BIAS 偏离、接近布林上轨、放量急涨时，不应继续加仓，目标仓位应降低一档。
 6. ATR 不参与本文档决策；ATR 后续只进入网格建议或独立波动模块。
 7. 系统输出应是“建议”和“风险提示”，不应输出绝对化交易指令。
+
