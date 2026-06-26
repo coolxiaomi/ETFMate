@@ -824,3 +824,45 @@ else:
 6. ATR 不参与本文档决策；ATR 后续只进入网格建议或独立波动模块。
 7. 当 `targetPositionRatio == 0` 且已有持仓时，主动作必须明确为 `REDUCE` / `EXIT_TREND_POSITION` 这类可执行降风险语义；`TREND_REVIEW` 只能作为辅助标签，不能替代主动作。
 8. 系统输出应是“建议”和“风险提示”，不应输出绝对化交易指令。
+
+---
+
+## 18. 趋势交易账户模式
+
+当前 ETFMate 默认账户模式为：
+
+```text
+account_mode = TREND_TRADING
+```
+
+在该模式下，旧的 `targetPositionRatio` / `newPositionRatio` / `adjustRatio` 字段继续输出，主要用于兼容报告、AI 输入和旧 JSON 回放；它们不再作为单只 ETF 固定仓位上限，也不因 ETF 类型、黄金属性或同类集中度自动触发减仓。
+
+主决策链调整为：
+
+```text
+ShortTrendScore
+  -> trend_overheat_level
+  -> trend_trade_mode
+  -> execution_mode
+  -> 网格执行参数校验
+```
+
+`trend_trade_mode` 取值：
+
+```text
+TREND_ADD            强趋势加仓
+TREND_HOLD_GRID      趋势持有
+PROFIT_PROTECTION    高位保护
+BALANCED_GRID        震荡滚动
+WEAK_REDUCE          弱势减仓
+ONLY_SELL_OR_CLEAR   只卖清仓
+PAUSE                暂停
+```
+
+关键规则：
+
+1. `ShortTrendScore < 45` 时，进入 `ONLY_SELL_OR_CLEAR`，买入侧必须归零，允许按条件单卖出或清仓候选处理。
+2. 强趋势且不过热时，不因浮盈或单只仓位参考值过早减仓；是否加仓由 MA5/MA10、量能和过热状态确认。
+3. 强趋势但过热时，进入 `PROFIT_PROTECTION`，停止追买或只保留小额买入，同时分批兑现。
+4. `45 <= ShortTrendScore < 60` 时，进入 `WEAK_REDUCE`，不继续扩大仓位。
+5. 商品/黄金/QDII 与其他 ETF 一样按趋势模式处理，不再有配置型特殊动作。

@@ -53,9 +53,9 @@ description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用户�
 - `references/etfmate-domain-rules.md`：skill 运行检查清单、阻断条件、文件产物和 P0 验收项。
 - `docs/skill-contract.md`：skill 入口契约与仓库规则文档的权威边界。
 - `docs/score.md`：`ShortTrendScore` 趋势评分算法。
-- `docs/action.md`：趋势评分到仓位动作、目标仓位和禁用交易指令文案。
+- `docs/action.md`：趋势评分到账户模式、趋势交易模式、仓位动作和禁用交易指令文案。
 - `docs/rule.md`：ETF 池过滤、交易硬过滤、规则引擎数据流和 AI 复核边界。
-- `docs/grid.md`：Touker 网格建议、基准价、买入反弹/卖出回落、风险联动和回归测试。
+- `docs/grid.md`：Touker 网格模式、执行数量校验、基准价、买入反弹/卖出回落、风险联动和回归测试。
 - `docs/report.md`：HTML 报告展示排序、风险页聚合和展示契约。
 
 ## CLI 与产物

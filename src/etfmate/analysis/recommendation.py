@@ -72,7 +72,7 @@ def recommend(
         confidence = _num_or_zero(layer_payload.get("confidence"))
         total_score = _num_or_zero(layer_payload.get("total_score"))
         if confidence < 45:
-            risks.append("七层证据未完整接入，仅作复核提示，不单独压低强趋势动作")
+            risks.append("七层证据未完整接入，仅作复核提示")
         if total_score <= -2 and action in {"建仓", "轻仓建仓", "加仓", "持有或加仓", "持有待加仓确认", "持有观察"}:
             action = "观察" if not position else "持有"
             risks.append("多层证据偏弱，暂不把短线趋势信号直接解释为加仓信号")
@@ -167,6 +167,10 @@ def recommend(
         "layered_score": layer_payload.get("total_score") if layer_payload else None,
         "rule_decision": rule_decision,
         "rule_trend_score": rule_decision.get("trend_score"),
+        "account_mode": rule_decision.get("account_mode"),
+        "trend_overheat_level": rule_decision.get("trend_overheat_level"),
+        "trend_trade_mode": rule_decision.get("trend_trade_mode"),
+        "execution_mode": rule_decision.get("execution_mode"),
         "rule_filter_status": rule_decision.get("filter_status"),
         "target_position_pct": rule_decision.get("target_position_pct"),
         "current_position_ratio": rule_decision.get("current_position_ratio"),
@@ -264,11 +268,11 @@ def _action_plan(action: str, position: Position | None, grid: GridConfig | None
     adjust_pct = _num_or_zero((rule_decision or {}).get("adjust_pct"))
     if not position:
         if action in {"建仓", "轻仓建仓"}:
-            target_text = f"，目标仓位约 {target_pct:.1f}%" if target_pct else ""
+            target_text = f"，趋势参考力度约 {target_pct:.1f}%" if target_pct else ""
             qty = _round_lot(grid_qty or 100)
-            return qty, f"无当前持仓{target_text}；首笔只做目标仓位的约1/3或单格小仓位，后续按趋势评分分批"
+            return qty, f"无当前持仓{target_text}；首笔只做参考力度的约1/3或单格小仓位，后续按趋势评分分批"
         if action in {"观察", "禁止交易"}:
-            target_text = f"，规则目标仓位约 {target_pct:.1f}%" if target_pct else ""
+            target_text = f"，规则趋势参考约 {target_pct:.1f}%" if target_pct else ""
             return None, f"无当前持仓{target_text}；当前暂不新开仓，等待入场条件"
         return None, "无当前持仓，先纳入观察池"
     if action == "禁止交易":
@@ -277,7 +281,7 @@ def _action_plan(action: str, position: Position | None, grid: GridConfig | None
         return None, "保留观察，不新增买入或卖出动作"
     if action in {"减仓", "退出短线仓位", "风控复核"}:
         if action == "风控复核":
-            return None, f"触发风控复核；目标仓位约 {target_pct:.1f}%，先人工确认趋势状态"
+            return None, f"触发风控复核；趋势参考力度约 {target_pct:.1f}%，先人工确认趋势状态"
         ratio_qty = quantity * min(max(adjust_pct, 0.0), 100.0) / max(_num_or_zero((rule_decision or {}).get("current_position_pct")), 0.01)
         fallback = quantity * (0.5 if action == "退出短线仓位" else 0.3)
         target = min(grid_qty or ratio_qty or fallback, quantity * (0.5 if action == "退出短线仓位" else 0.3))
@@ -288,12 +292,12 @@ def _action_plan(action: str, position: Position | None, grid: GridConfig | None
         return suggested, f"先减约 {suggested:g} 份，剩余约 {keep:g} 份作为底仓继续观察；新仓位参考 {new_pct:.1f}%"
     if action in {"加仓", "持有或加仓", "持有待加仓确认", "持有观察"}:
         if action in {"持有或加仓", "持有待加仓确认", "持有观察"}:
-            return None, f"目标仓位约 {target_pct:.1f}%，但确认条件不足；先持有，等待回踩或量能/ATR确认"
+            return None, f"趋势参考力度约 {target_pct:.1f}%，但确认条件不足；先持有，等待回踩或量能/ATR确认"
         ratio_qty = quantity * min(max(adjust_pct, 0.0), 100.0) / max(_num_or_zero((rule_decision or {}).get("current_position_pct")), 0.01)
         base = grid_qty or ratio_qty or quantity * 0.2
         cap = max(100, quantity * 0.5)
         suggested = min(_round_lot(base), _round_lot(cap))
-        return suggested, f"参考加仓 {suggested:g} 份，分批执行；目标仓位约 {target_pct:.1f}%，本次后参考 {new_pct:.1f}%"
+        return suggested, f"参考加仓 {suggested:g} 份，分批执行；趋势参考力度约 {target_pct:.1f}%，本次后参考 {new_pct:.1f}%"
     if action in {"暂停网格", "暂停买入侧"}:
         return None, "暂停新增买入；已有持仓保留底仓，优先等趋势修复"
     return None, "维持当前仓位，按网格纪律执行"
@@ -301,7 +305,7 @@ def _action_plan(action: str, position: Position | None, grid: GridConfig | None
 
 def _entry_plan(market: MarketSnapshot, action: str, rule_decision: dict[str, Any], watch_only: bool) -> str:
     target_pct = _num_or_zero(rule_decision.get("target_position_pct"))
-    target_text = f"目标仓位 {target_pct:.1f}%" if target_pct else "目标仓位待规则确认"
+    target_text = f"趋势参考力度 {target_pct:.1f}%" if target_pct else "趋势参考待规则确认"
     refs = []
     if market.ma20:
         refs.append(f"MA20 {market.ma20:.3f}")

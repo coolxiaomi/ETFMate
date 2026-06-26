@@ -118,8 +118,12 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
                     "amount_ratio20": item.get("amount_ratio20"),
                 },
                 "rule": {
+                    "account_mode": rule.get("account_mode") or item.get("account_mode"),
                     "action": item.get("action"),
                     "position_action": rule.get("position_action") or item.get("position_action"),
+                    "trend_trade_mode": rule.get("trend_trade_mode") or item.get("trend_trade_mode"),
+                    "trend_overheat_level": rule.get("trend_overheat_level") or item.get("trend_overheat_level"),
+                    "execution_mode": rule.get("execution_mode") or item.get("execution_mode"),
                     "action_quantity": item.get("action_quantity"),
                     "short_trend_score": rule.get("trend_score"),
                     "trend_level": rule.get("trend_level"),
@@ -138,6 +142,10 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
                 },
                 "grid": {
                     "action": grid.get("action"),
+                    "grid_mode": grid.get("grid_mode"),
+                    "grid_mode_label": grid.get("grid_mode_label"),
+                    "execution_checks": grid.get("execution_checks"),
+                    "cash_constraint_status": grid.get("cash_constraint_status"),
                     "grid_applicable": grid.get("grid_applicable"),
                     "grid_purpose": grid.get("grid_purpose"),
                     "strategy_profile": grid.get("strategy_profile"),

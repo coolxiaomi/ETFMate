@@ -21,8 +21,8 @@ ACTION_NAMES = {
     "RISK_REVIEW": "趋势复核",
     "EXIT_SHORT_TERM": "退出短线仓位",
 }
+ACCOUNT_MODE = "TREND_TRADING"
 MAX_TOTAL_POSITION_RATIO = 0.80
-MAX_SINGLE_POSITION_RATIO = 0.30
 MAX_ADD_STEP_RATIO = 0.10
 
 
@@ -37,8 +37,10 @@ def decide_position(
     filters = _trade_filters(market, position, category)
     trend = _trend_score(market)
     portfolio = _portfolio_state(position, all_positions or [], category)
+    overheat_level = _trend_overheat_level(market, trend)
     decision = _position_decision_from_short_trend(position, market, filters, trend, portfolio)
     return {
+        "account_mode": ACCOUNT_MODE,
         "action": decision["action_name"],
         "position_action": decision["position_action"],
         "action_name": decision["action_name"],
@@ -50,6 +52,9 @@ def decide_position(
         "trend_scores": trend["scores"],
         "trend_indicators": trend["indicators"],
         "trend_data_sufficient": trend["data_sufficient"],
+        "trend_overheat_level": overheat_level,
+        "trend_trade_mode": _trend_trade_mode(trend["score"], overheat_level),
+        "execution_mode": decision["execution_mode"],
         "risk_level": decision["risk_level"],
         "filter_status": filters["status"],
         "blocked_actions": filters["blocked_actions"],
@@ -294,13 +299,15 @@ def _position_decision_from_short_trend(
     holding = bool(position and position.quantity > 0 and position.market_value > 0)
     no_high_risk = _no_high_risk(trend)
     high_risk = _has_high_risk(trend)
+    overheat_level = _trend_overheat_level(market, trend)
+    trade_mode = _trend_trade_mode(score, overheat_level)
     risk_level = _position_risk_level(score, trend)
     target_ratio = 0.0
     new_ratio = current_ratio
     adjust_ratio = 0.0
     action = "WATCH"
     reasons = [
-        f"趋势评分 {score:.0f}，当前仓位 {current_ratio:.2%}",
+        f"趋势交易账户：趋势评分 {score:.0f}，当前资金暴露 {current_ratio:.2%}，模式 {trade_mode}",
     ]
     warnings = list(filters["reasons"])
     if portfolio.get("position_pct_confidence") == "low":
@@ -324,11 +331,11 @@ def _position_decision_from_short_trend(
     if not holding:
         if score >= 85 and no_high_risk and not _portfolio_blocks_add(portfolio):
             action = "OPEN"
-            target_ratio = _apply_portfolio_caps(0.15, current_ratio, portfolio, warnings)
+            target_ratio = _apply_cash_discipline(0.15, current_ratio, portfolio, warnings)
             reasons.append("未持仓且短线趋势评分不低于85、无高风险标签，进入初始建仓区")
         elif score >= 75 and no_high_risk and not _portfolio_blocks_add(portfolio):
             action = "LIGHT_OPEN"
-            target_ratio = _apply_portfolio_caps(0.10, current_ratio, portfolio, warnings)
+            target_ratio = _apply_cash_discipline(0.10, current_ratio, portfolio, warnings)
             reasons.append("未持仓且短线趋势评分不低于75、无高风险标签，可轻仓建仓观察")
         else:
             action = "WATCH"
@@ -338,41 +345,49 @@ def _position_decision_from_short_trend(
         new_ratio = target_ratio
     else:
         base_target = _base_target_position(score, no_high_risk)
-        target_ratio = _downgrade_target_position(base_target) if high_risk else base_target
-        target_ratio = _apply_portfolio_caps(target_ratio, current_ratio, portfolio, warnings)
+        target_ratio = _apply_cash_discipline(base_target, current_ratio, portfolio, warnings)
         gap = target_ratio - current_ratio
         serious_risk = _is_serious_short_risk(score, market)
-        reasons.append(f"基础目标仓位 {base_target:.0%}，风险调整后目标仓位 {target_ratio:.0%}")
+        reasons.append(f"趋势参考动作力度 {base_target:.0%}，现金纪律后参考 {target_ratio:.0%}；该字段不作为单只固定仓位上限")
 
-        if serious_risk:
+        if score < 45:
             action = "EXIT_TREND_POSITION"
-            reasons.append("短线评分低于45且价格跌破MA5、MA5低于MA10，触发退出短线仓位")
-        elif target_ratio <= 0 and current_ratio > 0:
+            target_ratio = 0.0
+            reasons.append("短线评分低于45，趋势交易账户进入只卖/清仓候选，买入侧必须归零")
+        elif serious_risk:
+            action = "EXIT_TREND_POSITION"
+            target_ratio = 0.0
+            reasons.append("价格跌破MA5且MA5低于MA10，触发退出短线仓位")
+        elif trade_mode == "WEAK_REDUCE":
             action = "REDUCE"
-            reasons.append("目标仓位为 0 且仍有持仓，主动作必须明确为减仓/退出观察，趋势复核只作为辅助提示")
-        elif abs(gap) < 0.05:
-            action = "HOLD"
-            reasons.append("目标仓位与当前仓位差小于5%，不做频繁微调")
-        elif gap > 0:
-            action = "ADD"
-            reasons.append("目标仓位高于当前仓位，可按阶梯方式加仓")
+            target_ratio = min(target_ratio, current_ratio)
+            reasons.append("趋势评分处于震荡观察区，趋势交易账户不继续扩大仓位，优先反弹减仓")
+        elif trade_mode == "PROFIT_PROTECTION":
+            action = "HOLD_OR_REDUCE" if current_ratio <= target_ratio else "REDUCE"
+            target_ratio = min(target_ratio, current_ratio)
+            reasons.append("趋势仍在但短线过热，停止追买并转为高位保护/分批兑现")
+        elif trade_mode == "TREND_ADD":
+            if _can_add_by_trend(market, trend):
+                action = "ADD"
+                reasons.append("强趋势且未过热，趋势交易账户允许继续扩张仓位")
+            else:
+                action = "HOLD_WAIT_ADD"
+                reasons.append("强趋势但量能或均线确认不足，先持有并等待加仓确认")
+        elif trade_mode == "TREND_HOLD_GRID":
+            action = "ADD" if gap > 0.05 and _can_add_by_trend(market, trend) else "HOLD"
+            reasons.append("短线上升趋势，以趋势持有为主，只有确认条件满足才加仓")
         else:
-            action = "REDUCE"
-            reasons.append("目标仓位低于当前仓位，建议降低部分仓位")
+            action = "HOLD" if abs(gap) < 0.05 else ("ADD" if gap > 0 else "REDUCE")
+            reasons.append("震荡偏强，按小网格滚动，不因 ETF 类型或同类集中度自动降仓")
 
         if action == "ADD":
-            if not _can_add_by_trend(market, trend):
-                action = "HOLD_WAIT_ADD"
-                adjust_ratio = 0.0
-                new_ratio = current_ratio
-                reasons = [reason for reason in reasons if "可按阶梯方式加仓" not in reason]
-                warnings.append("加仓条件未完全满足，需继续观察 MA5/MA10、ATR 和 BIAS 后再执行")
-            else:
-                adjust_ratio = min(max(gap, 0.0), MAX_ADD_STEP_RATIO)
-                new_ratio = min(current_ratio + adjust_ratio, target_ratio)
+            adjust_ratio = min(max(target_ratio - current_ratio, 0.0), MAX_ADD_STEP_RATIO)
+            new_ratio = current_ratio + adjust_ratio
         elif action in {"REDUCE", "TREND_REVIEW", "EXIT_TREND_POSITION"}:
-            max_reduce_step = 0.50 if serious_risk else 0.30
+            max_reduce_step = 0.50 if action == "EXIT_TREND_POSITION" else 0.30
             reduce_gap = max(0.0, current_ratio - target_ratio)
+            if reduce_gap <= 0 and action in {"REDUCE", "EXIT_TREND_POSITION"}:
+                reduce_gap = current_ratio * (0.50 if action == "EXIT_TREND_POSITION" else 0.30)
             adjust_ratio = min(reduce_gap, max_reduce_step)
             new_ratio = max(current_ratio - adjust_ratio, target_ratio, 0.0)
         else:
@@ -394,6 +409,7 @@ def _position_decision_from_short_trend(
         no_high_risk,
         reasons,
         warnings or ["该建议仅为趋势评分结果，不构成交易指令"],
+        execution_mode=_execution_mode(action, trade_mode),
     )
 
 
@@ -409,6 +425,7 @@ def _build_position_decision(
     reasons: list[str],
     warnings: list[str],
     action_name: str | None = None,
+    execution_mode: str | None = None,
 ) -> dict[str, Any]:
     return {
         "current_position_ratio": current_ratio,
@@ -417,6 +434,7 @@ def _build_position_decision(
         "adjust_ratio": adjust_ratio,
         "position_action": action,
         "action_name": action_name or ACTION_NAMES[action],
+        "execution_mode": execution_mode or _execution_mode(action, ""),
         "risk_level": risk_level,
         "high_risk": high_risk,
         "no_high_risk": no_high_risk,
@@ -458,10 +476,8 @@ def _downgrade_target_position(base_target: float) -> float:
     return 0.00
 
 
-def _apply_portfolio_caps(target_ratio: float, current_ratio: float, portfolio: dict[str, Any], warnings: list[str]) -> float:
-    capped = min(target_ratio, MAX_SINGLE_POSITION_RATIO)
-    if target_ratio > capped:
-        warnings.append("单只 ETF 目标仓位按 30% 上限压缩")
+def _apply_cash_discipline(target_ratio: float, current_ratio: float, portfolio: dict[str, Any], warnings: list[str]) -> float:
+    capped = target_ratio
     if portfolio.get("position_pct_confidence") == "low":
         if capped > current_ratio:
             warnings.append("资金仓位口径置信度低，新增买入目标先按 4% 以内试探")
@@ -482,6 +498,69 @@ def _portfolio_blocks_add(portfolio: dict[str, Any]) -> bool:
         return False
     total_ratio = (_num_or_none(portfolio.get("total_position_pct")) or 0.0) / 100.0
     return total_ratio >= MAX_TOTAL_POSITION_RATIO
+
+
+def _trend_overheat_level(market: MarketSnapshot, trend: dict[str, Any]) -> str:
+    indicators = trend.get("indicators") or {}
+    boll_position = _num_or_none(indicators.get("boll_position")) or _num_or_none(market.boll_position)
+    rsi6 = _num_or_none(indicators.get("rsi6")) or _num_or_none(market.rsi6)
+    bias5 = _num_or_none(indicators.get("bias5")) or _num_or_none(market.bias5_ratio)
+    bias6 = _num_or_none(market.bias6)
+    bias12 = _num_or_none(indicators.get("bias12")) or _num_or_none(market.bias12)
+    bias24 = _num_or_none(indicators.get("bias24")) or _num_or_none(market.bias24)
+    close = _num_or_none(market.last_price)
+    boll_upper = _num_or_none(market.boll_upper)
+
+    severe = any(
+        (
+            boll_position is not None and boll_position >= 1.0,
+            close is not None and boll_upper is not None and close > boll_upper,
+            rsi6 is not None and rsi6 >= 85,
+            bias6 is not None and bias6 >= 6,
+            bias12 is not None and bias12 >= 10,
+            bias24 is not None and bias24 >= 12,
+        )
+    )
+    if severe:
+        return "SEVERE_OVERHEATED"
+    overheated = any(
+        (
+            boll_position is not None and boll_position >= 0.95,
+            close is not None and boll_upper is not None and close >= boll_upper * 0.995,
+            rsi6 is not None and rsi6 >= 75,
+            bias12 is not None and bias12 >= 7,
+            bias24 is not None and bias24 >= 8,
+            bias5 is not None and bias5 >= 0.06,
+        )
+    )
+    return "OVERHEATED" if overheated else "NONE"
+
+
+def _trend_trade_mode(score: float, overheat_level: str) -> str:
+    overheated = overheat_level in {"OVERHEATED", "SEVERE_OVERHEATED"}
+    if score < 45:
+        return "ONLY_SELL_OR_CLEAR"
+    if score < 60:
+        return "WEAK_REDUCE"
+    if score < 75:
+        return "PROFIT_PROTECTION" if overheated else "BALANCED_GRID"
+    if score < 85:
+        return "PROFIT_PROTECTION" if overheated else "TREND_HOLD_GRID"
+    return "PROFIT_PROTECTION" if overheated else "TREND_ADD"
+
+
+def _execution_mode(action: str, trade_mode: str) -> str:
+    if action in {"NO_ACTION", "WATCH"}:
+        return "NO_EXECUTION"
+    if trade_mode == "ONLY_SELL_OR_CLEAR" or action == "EXIT_TREND_POSITION":
+        return "SELL_ONLY_CLEAR_CANDIDATE"
+    if trade_mode == "WEAK_REDUCE" or action in {"REDUCE", "HOLD_OR_REDUCE"}:
+        return "REDUCE_OR_PROTECT"
+    if trade_mode == "PROFIT_PROTECTION":
+        return "PROFIT_PROTECTION"
+    if action in {"ADD", "OPEN", "LIGHT_OPEN"}:
+        return "ALLOW_TREND_BUY"
+    return "HOLD_OR_GRID"
 
 
 def _has_high_risk(trend: dict[str, Any]) -> bool:

@@ -618,3 +618,33 @@ def decide_rule(etf, position, portfolio):
 4. 当前模型覆盖宽基 ETF、行业 ETF、主题 ETF、商品 / 黄金 ETF、跨境 / QDII ETF；不同类型在流动性阈值、仓位动作和解释文案上应保持区分。
 5. ATR 不进入趋势评分和核心仓位动作，只进入网格建议或独立波动模块。
 6. 所有输出必须是建议和风险提示，不得输出绝对交易指令。
+
+---
+
+## 18. 趋势交易账户输出契约
+
+规则引擎当前默认输出趋势交易账户字段：
+
+```text
+account_mode = TREND_TRADING
+trend_overheat_level = NONE / OVERHEATED / SEVERE_OVERHEATED
+trend_trade_mode = TREND_ADD / TREND_HOLD_GRID / PROFIT_PROTECTION / BALANCED_GRID / WEAK_REDUCE / ONLY_SELL_OR_CLEAR / PAUSE
+execution_mode = NO_EXECUTION / SELL_ONLY_CLEAR_CANDIDATE / REDUCE_OR_PROTECT / PROFIT_PROTECTION / ALLOW_TREND_BUY / HOLD_OR_GRID
+```
+
+执行优先级：
+
+```text
+交易硬过滤
+  -> ShortTrendScore 分层
+  -> 过热识别
+  -> 当前是否持仓
+  -> 现金纪律和交易单位
+```
+
+趋势交易模式下的差异：
+
+1. ETF 类型、黄金特殊性、同类 ETF 集中度只作为解释或人工筛选信息，不自动阻断强趋势标的。
+2. `target_position_ratio` 继续输出为“趋势动作力度参考”，不再作为配置型硬上限。
+3. 没有可用现金字段时，不假设现金充足；新增买入不被放大，但也不回退到单只固定仓位上限。
+4. `ShortTrendScore < 45` 的持仓标的必须进入卖出/清仓候选语义，不再显示普通持有或降低买入侧。

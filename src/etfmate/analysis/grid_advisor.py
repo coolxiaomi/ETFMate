@@ -6,6 +6,15 @@ from etfmate.analysis.layered_context import LayeredContext, normalize_context
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position
 
 STRATEGY_PROFILE = "条件单代替盯盘；胜率优先；不追求吃完整段行情；盈利看趋势管理；不深研标的时默认保守"
+GRID_MODE_LABELS = {
+    "TREND_ADD": "趋势加仓",
+    "TREND_HOLD_GRID": "趋势持有",
+    "PROFIT_PROTECTION": "高位保护",
+    "BALANCED_GRID": "震荡滚动",
+    "WEAK_REDUCE": "弱势减仓",
+    "ONLY_SELL_OR_CLEAR": "只卖清仓",
+    "PAUSE": "暂停",
+}
 
 
 def advise_grid(
@@ -23,6 +32,8 @@ def advise_grid(
     position_risk_level = str((rule_decision or {}).get("risk_level") or "")
     target_ratio = _num_or_zero((rule_decision or {}).get("target_position_ratio"))
     blocked = set((rule_decision or {}).get("blocked_actions") or [])
+    overheat_level = str((rule_decision or {}).get("trend_overheat_level") or "NONE")
+    grid_mode = _grid_mode_from_decision(trend_score, overheat_level, position_action, rule_action)
     layer_payload = normalize_context(layered_context)
 
     if not _grid_applicable(has_existing_grid, position, rule_action, position_action):
@@ -180,6 +191,29 @@ def advise_grid(
     if _should_win_rate_boost_sell(position, strong_positive, grid_purpose, trend_profit_continuation):
         suggested_sell_qty = max(suggested_sell_qty or base_lot_qty, _round_qty(base_lot_qty * 1.5))
         reasons.append("盈利保护护栏触发且趋势/风险确认不足，卖出侧保持更积极，不等待趋势完全破坏")
+    suggested_buy_fall, suggested_sell_rise, suggested_buy_qty, suggested_sell_qty, mode_reason = _apply_trend_grid_mode(
+        grid_mode,
+        market,
+        position,
+        grid,
+        overheat_level,
+        base_lot_qty,
+        suggested_buy_fall,
+        suggested_sell_rise,
+        suggested_buy_qty,
+        suggested_sell_qty,
+    )
+    reasons.append(mode_reason)
+    suggested_buy_qty, suggested_sell_qty, execution_checks = _apply_execution_checks(
+        grid_mode,
+        position,
+        market,
+        suggested_buy_qty,
+        suggested_sell_qty,
+    )
+    reasons.extend(check["message"] for check in execution_checks if check.get("message"))
+    action = _action_from_grid_mode(grid_mode, action, has_existing_grid)
+    grid_purpose = _grid_purpose(action, position, position_action, rule_action, strong_positive, hard_weak, trend_profit_continuation)
     confirmation_pct = _confirmation_pct(base_eval.get("suggested_base") or (grid.base_price if grid else None) or market.last_price)
     suggested_buy_rebound = confirmation_pct
     suggested_sell_pullback = confirmation_pct
@@ -192,6 +226,10 @@ def advise_grid(
         "code": grid.code if grid else market.code,
         "name": grid.name if grid else market.name,
         "action": action,
+        "grid_mode": grid_mode,
+        "grid_mode_label": _grid_mode_label(grid_mode),
+        "execution_checks": execution_checks,
+        "cash_constraint_status": _cash_constraint_status(position),
         "grid_applicable": True,
         "grid_purpose": grid_purpose,
         "strategy_profile": STRATEGY_PROFILE,
@@ -236,6 +274,10 @@ def _inactive_grid_advice(
         "code": grid.code if grid else market.code,
         "name": grid.name if grid else market.name,
         "action": "暂不设网格",
+        "grid_mode": "PAUSE",
+        "grid_mode_label": _grid_mode_label("PAUSE"),
+        "execution_checks": [],
+        "cash_constraint_status": "NO_BUY",
         "grid_applicable": False,
         "grid_purpose": "暂不设网格",
         "strategy_profile": STRATEGY_PROFILE,
@@ -257,6 +299,153 @@ def _grid_applicable(has_existing_grid: bool, position: Position | None, rule_ac
     return rule_action in {"建仓", "轻仓建仓"} or position_action in {"OPEN", "LIGHT_OPEN"}
 
 
+def _grid_mode_from_decision(trend_score: float, overheat_level: str, position_action: str, rule_action: str) -> str:
+    if position_action in {"NO_ACTION"} or rule_action in {"禁止交易"}:
+        return "PAUSE"
+    if trend_score < 45 or position_action in {"EXIT_TREND_POSITION", "EXIT_SHORT_TERM"} or rule_action in {"退出短线仓位"}:
+        return "ONLY_SELL_OR_CLEAR"
+    if trend_score < 60 or position_action in {"REDUCE", "TREND_REVIEW", "RISK_REVIEW"} or rule_action in {"减仓", "趋势复核", "风控复核"}:
+        return "WEAK_REDUCE"
+    if overheat_level in {"OVERHEATED", "SEVERE_OVERHEATED"}:
+        return "PROFIT_PROTECTION"
+    if trend_score >= 85:
+        if position_action == "HOLD":
+            return "TREND_HOLD_GRID"
+        return "TREND_ADD"
+    if trend_score >= 75:
+        return "TREND_HOLD_GRID"
+    return "BALANCED_GRID"
+
+
+def _grid_mode_label(mode: str) -> str:
+    return GRID_MODE_LABELS.get(mode, mode or "待定")
+
+
+def _action_from_grid_mode(mode: str, current_action: str, has_existing_grid: bool) -> str:
+    if mode == "PAUSE":
+        return "暂停"
+    if mode == "ONLY_SELL_OR_CLEAR":
+        return "只卖清仓"
+    if mode == "WEAK_REDUCE":
+        return "弱势减仓"
+    if mode == "PROFIT_PROTECTION":
+        return "高位保护"
+    if mode == "TREND_ADD":
+        return "趋势加仓" if has_existing_grid else "新建网格"
+    if mode == "TREND_HOLD_GRID":
+        return "趋势持有"
+    if mode == "BALANCED_GRID":
+        return "震荡滚动"
+    return current_action
+
+
+def _apply_trend_grid_mode(
+    mode: str,
+    market: MarketSnapshot,
+    position: Position | None,
+    grid: GridConfig | None,
+    overheat_level: str,
+    base_lot_qty: float,
+    buy_fall: float | None,
+    sell_rise: float | None,
+    buy_qty: float | None,
+    sell_qty: float | None,
+) -> tuple[float | None, float | None, float | None, float | None, str]:
+    atr_pct = market.atr14_pct or _current_step(grid) or 3.0
+    current_qty = _round_lot_down(position.quantity) if position else 0
+    base_qty = _round_lot_down(base_lot_qty) or 100
+    if mode == "TREND_ADD":
+        next_buy = max(base_qty, _round_lot_down(sell_qty or base_qty))
+        next_sell = _round_lot_down(min(sell_qty or base_qty, current_qty / 3)) if current_qty else sell_qty
+        return (
+            _round_pct(_clamp(atr_pct * 0.85, 1.8, 2.8)),
+            _round_pct(max(sell_rise or 0, _clamp(atr_pct * 1.4, 4.0, 6.0))),
+            next_buy,
+            next_sell or 0,
+            "趋势强且未过热，网格切换为趋势加仓：买入积极，卖出放慢并保留趋势仓",
+        )
+    if mode == "TREND_HOLD_GRID":
+        return (
+            _round_pct(_clamp(atr_pct * 0.9, 2.5, 3.3)),
+            _round_pct(_clamp(atr_pct * 0.9, 2.6, 3.8)),
+            base_qty,
+            _round_lot_down(min(sell_qty or base_qty, current_qty)) if current_qty else sell_qty,
+            "趋势仍在，网格切换为趋势持有：买卖均衡但不追高",
+        )
+    if mode == "PROFIT_PROTECTION":
+        severe = overheat_level == "SEVERE_OVERHEATED"
+        next_buy = 0 if severe else min(_round_lot_down(buy_qty or base_qty), 100)
+        sell_floor = current_qty / 2 if severe and current_qty else sell_qty or base_qty
+        next_sell = _round_lot_down(max(sell_qty or base_qty, sell_floor))
+        return (
+            _round_pct(_clamp(atr_pct * 1.2, 3.5, 5.0)),
+            _round_pct(_clamp(atr_pct * 0.8, 2.5, 3.5)),
+            next_buy,
+            next_sell,
+            "短线过热，网格切换为高位保护：降低买入，卖出更积极",
+        )
+    if mode == "BALANCED_GRID":
+        return (
+            _round_pct(_clamp(atr_pct * 0.9, 2.5, 3.5)),
+            _round_pct(_clamp(atr_pct * 0.9, 2.5, 4.0)),
+            base_qty,
+            _round_lot_down(min(sell_qty or base_qty, current_qty)) if current_qty else sell_qty,
+            "震荡偏强，网格切换为震荡滚动：小额均衡，不扩大单边暴露",
+        )
+    if mode == "WEAK_REDUCE":
+        next_sell = _round_lot_down(max(sell_qty or base_qty, current_qty / 3)) if current_qty else sell_qty
+        return (
+            buy_fall,
+            sell_rise,
+            0,
+            next_sell,
+            "趋势不强，网格切换为弱势减仓：买入归零或停用，反弹分批卖出",
+        )
+    if mode == "ONLY_SELL_OR_CLEAR":
+        return (
+            buy_fall,
+            sell_rise,
+            0,
+            current_qty,
+            "趋势失效，网格切换为只卖清仓：买入必须为 0，卖出不超过当前持仓",
+        )
+    return buy_fall, sell_rise, 0, 0, "规则禁止交易或数据不可用，本次暂停网格"
+
+
+def _apply_execution_checks(
+    mode: str,
+    position: Position | None,
+    market: MarketSnapshot,
+    buy_qty: float | None,
+    sell_qty: float | None,
+) -> tuple[float | None, float | None, list[dict[str, Any]]]:
+    checks: list[dict[str, Any]] = []
+    current_qty = _round_lot_down(position.quantity) if position else 0
+    normalized_buy = _round_lot_down(buy_qty or 0)
+    normalized_sell = _round_lot_down(sell_qty or 0)
+    if mode in {"WEAK_REDUCE", "ONLY_SELL_OR_CLEAR", "PAUSE"} and normalized_buy != 0:
+        normalized_buy = 0
+        checks.append({"check": "weak_trend_buy_zero", "status": "fixed", "message": "趋势偏弱或暂停模式下，买入数量已修正为 0"})
+    if position and normalized_sell > current_qty:
+        normalized_sell = current_qty
+        checks.append({"check": "sell_qty_lte_position", "status": "fixed", "message": "卖出数量超过当前持仓，已按持仓上限自动修正"})
+    else:
+        checks.append({"check": "sell_qty_lte_position", "status": "ok", "message": ""})
+    if normalized_buy % 100 != 0 or normalized_sell % 100 != 0:
+        checks.append({"check": "round_lot", "status": "fixed", "message": "买卖数量已按 100 股整数倍向下修正"})
+    checks.append({"check": "buy_cash", "status": "unknown", "message": "当前未采集可用现金，买入数量不按单只仓位上限放大"})
+    if market.last_price <= 0 and normalized_buy:
+        normalized_buy = 0
+        checks.append({"check": "valid_price", "status": "fixed", "message": "最新价无效，买入数量已修正为 0"})
+    return normalized_buy, normalized_sell, checks
+
+
+def _cash_constraint_status(position: Position | None) -> str:
+    if position and position.account_total_asset:
+        return "NO_AVAILABLE_CASH_FIELD"
+    return "UNKNOWN_NO_CASH_FIELD"
+
+
 def _grid_purpose(
     action: str,
     position: Position | None,
@@ -268,13 +457,17 @@ def _grid_purpose(
 ) -> str:
     if not position:
         return "建仓网格"
-    if action in {"只保留卖出", "暂停买入侧"} or position_action in {"REDUCE", "TREND_REVIEW", "EXIT_TREND_POSITION", "RISK_REVIEW", "EXIT_SHORT_TERM"} or rule_action in {"减仓", "趋势复核", "风控复核", "退出短线仓位"}:
+    if action in {"只保留卖出", "暂停买入侧", "只卖清仓", "弱势减仓"} or position_action in {"REDUCE", "TREND_REVIEW", "EXIT_TREND_POSITION", "RISK_REVIEW", "EXIT_SHORT_TERM"} or rule_action in {"减仓", "趋势复核", "风控复核", "退出短线仓位"}:
         return "止盈/退出网格"
     if strong_positive and position.pnl_pct > 0 and not trend_profit_continuation:
         return "止盈网格"
     if hard_weak:
         return "防守网格"
-    if position_action in {"ADD", "HOLD_WAIT_ADD"}:
+    if action == "高位保护":
+        return "止盈网格"
+    if action == "震荡滚动":
+        return "持仓网格"
+    if position_action in {"ADD", "HOLD_WAIT_ADD"} or action == "趋势加仓":
         return "加仓网格"
     return "持仓网格"
 
@@ -292,7 +485,7 @@ def _strategy_guardrails(
     guardrails = ["条件单用于替代盯盘，只给当前时点一套可执行参数"]
     confidence = _num_or_zero(layer_payload.get("confidence")) if layer_payload else 0
     if confidence < 60:
-        guardrails.append("七层证据未完整接入，仅作复核提示，不单独压低强趋势买入")
+        guardrails.append("七层证据未完整接入，仅作复核提示")
     if risk_level == "HIGH" or trend_score < 60 or "降低" in action or "暂停" in action:
         guardrails.append("趋势或风险未确认，宁可少赚，不用网格扩大不确定仓位")
     if position and position.pnl_pct > 0:
@@ -491,6 +684,12 @@ def _round_price(value: float) -> float:
 
 def _round_qty(value: float) -> float:
     return max(100, round(value / 100) * 100)
+
+
+def _round_lot_down(value: float | None) -> float:
+    if value is None or value <= 0:
+        return 0
+    return (int(value) // 100) * 100
 
 
 def _num_or_zero(value: Any) -> float:

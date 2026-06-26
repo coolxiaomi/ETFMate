@@ -500,7 +500,7 @@ def _title_meta(item: dict | None, grid: dict | None) -> str:
             ]
         )
     else:
-        parts.extend(["未持仓", f"目标仓位 {_pct(item.get('target_position_pct'))}"])
+        parts.extend(["未持仓", f"趋势参考 {_pct(item.get('target_position_pct'))}"])
     parts.append("网格开" if grid and grid.get("grid_applicable") is not False else "无网格")
     return " · " + "；".join(_simplify_direction_text(part) for part in parts if part)
 
@@ -511,7 +511,7 @@ def _holding_summary(item: dict) -> str:
             [
                 "未持仓",
                 _cell(item.get("candidate_source")),
-                f"目标仓位 {_pct(item.get('target_position_pct'))}",
+                f"趋势参考 {_pct(item.get('target_position_pct'))}",
             ]
         )
     return "；".join(
@@ -902,7 +902,7 @@ def _action_merged_html(item: dict) -> str:
         _inline_label("交易过滤", item.get("rule_filter_status")),
         _inline_label("持仓备注", item.get("investor_note")),
         _inline_label("仓位", _position_text(item)),
-        _inline_label("目标", _position_decision_text(item)),
+        _inline_label("执行", _position_decision_text(item)),
         _inline_label("风险等级", _risk_level_text(item.get("position_risk_level"))),
         _inline_label("执行计划", item.get("position_plan")),
         _inline_label("入场计划", item.get("entry_plan")),
@@ -1080,8 +1080,8 @@ def _filtered_action_reasons(item: dict) -> list[str]:
 def _position_text(item: dict) -> str:
     if item.get("quantity") is None:
         tier = _cell(item.get("position_tier"))
-        target = _pct(item.get("target_position_pct"))
-        return f"未持仓，{tier}，目标仓位 {target}"
+        mode = _grid_mode_text(item.get("trend_trade_mode") or (item.get("rule_decision") or {}).get("trend_trade_mode"))
+        return f"未持仓，{tier}，趋势模式 {mode}"
     tier = _cell(item.get("position_tier"))
     pct = _pct(item.get("position_pct"))
     holding_pct = _pct(item.get("holding_pct")) if item.get("holding_pct") is not None else "-"
@@ -1091,11 +1091,12 @@ def _position_text(item: dict) -> str:
 
 
 def _position_decision_text(item: dict) -> str:
-    target = _pct(item.get("target_position_pct"))
-    new_position = _pct(item.get("new_position_pct"))
+    exposure = _pct(item.get("position_pct"))
     adjust = _signed_pct(item.get("adjust_pct")) if item.get("adjust_pct") is not None else "-"
     action = _position_action_text(item.get("position_action"))
-    return f"目标 {target}，本次后 {new_position}，调整 {adjust}，动作 {action}"
+    mode = _grid_mode_text(item.get("trend_trade_mode") or (item.get("rule_decision") or {}).get("trend_trade_mode"))
+    execution = _execution_mode_text(item.get("execution_mode") or (item.get("rule_decision") or {}).get("execution_mode"))
+    return f"资金暴露 {exposure}，趋势模式 {mode}，动作 {action}，力度 {adjust}，执行 {execution}"
 
 
 def _grid_row(label: str, current: Any, suggested: Any, suffix: str) -> dict[str, Any]:
@@ -1245,8 +1246,10 @@ def _rule_score_detail(item: dict) -> str:
                 f"标签 {tags}" if tags else "",
                 f"仓位动作 {_position_action_text(rule.get('position_action') or rule.get('action_name') or rule.get('action'))}",
                 f"风险等级 {_risk_level_text(rule.get('risk_level'))}",
-                f"当前/目标/本次后 {_pct(rule.get('current_position_pct'))}/{_pct(rule.get('target_position_pct'))}/{_pct(rule.get('new_position_pct'))}",
-                f"调整 {_signed_pct(rule.get('adjust_pct'))}",
+                f"趋势模式 {_grid_mode_text(rule.get('trend_trade_mode'))}",
+                f"过热 {_overheat_text(rule.get('trend_overheat_level'))}",
+                f"当前资金暴露 {_pct(rule.get('current_position_pct'))}",
+                f"动作力度 {_signed_pct(rule.get('adjust_pct'))}",
             ]
             if part
         )
@@ -1427,6 +1430,40 @@ def _risk_level_text(value: Any) -> str:
     return mapping.get(str(value or ""), _cell(value))
 
 
+def _grid_mode_text(value: Any) -> str:
+    mapping = {
+        "TREND_ADD": "趋势加仓",
+        "TREND_HOLD_GRID": "趋势持有",
+        "PROFIT_PROTECTION": "高位保护",
+        "BALANCED_GRID": "震荡滚动",
+        "WEAK_REDUCE": "弱势减仓",
+        "ONLY_SELL_OR_CLEAR": "只卖清仓",
+        "PAUSE": "暂停",
+    }
+    return mapping.get(str(value or ""), _cell(value) if value else "-")
+
+
+def _overheat_text(value: Any) -> str:
+    mapping = {
+        "NONE": "无",
+        "OVERHEATED": "过热",
+        "SEVERE_OVERHEATED": "严重过热",
+    }
+    return mapping.get(str(value or ""), _cell(value) if value else "-")
+
+
+def _execution_mode_text(value: Any) -> str:
+    mapping = {
+        "NO_EXECUTION": "不执行",
+        "SELL_ONLY_CLEAR_CANDIDATE": "只卖/清仓候选",
+        "REDUCE_OR_PROTECT": "减仓保护",
+        "PROFIT_PROTECTION": "高位保护",
+        "ALLOW_TREND_BUY": "允许趋势买入",
+        "HOLD_OR_GRID": "持有/网格",
+    }
+    return mapping.get(str(value or ""), _cell(value) if value else "-")
+
+
 def _risk_level_code(item: dict | None) -> str:
     if not item:
         return ""
@@ -1454,7 +1491,7 @@ def _risk_nav_text(risk_level: Any, item: dict | None, risks: list[str]) -> str:
         parts.append(_display_action(str(action)))
     if risks:
         parts.append("；".join(risks[:2]))
-    return " · ".join(part for part in parts if part and part != "-")
+    return _simplify_direction_text(" · ".join(part for part in parts if part and part != "-"))
 
 
 def _risk_nav_reasons(item: dict | None) -> list[str]:
@@ -1550,12 +1587,27 @@ def _simplify_direction_text(value: Any) -> str:
     text = str(value)
     replacements = {
         "ShortTrendScore": "趋势评分",
+        "基础目标仓位": "基础动作力度",
+        "风险调整后目标仓位": "风险调整后参考",
+        "规则目标仓位": "规则趋势参考",
+        "目标仓位": "趋势参考",
+        "，不单独压低强趋势动作": "",
+        "，不单独压低强趋势买入": "",
+        "，不单独压低强趋势": "",
+        "；不单独压低强趋势动作": "",
+        "；不单独压低强趋势买入": "",
+        "；不单独压低强趋势": "",
+        "不单独压低强趋势动作": "",
+        "不单独压低强趋势买入": "",
         "持有或加仓": "持有观察",
         "持有待加仓确认": "持有观察",
         "持有待确认": "持有观察",
-        "暂停买入侧": "降低买",
-        "暂停买入": "降低买",
-        "降低买入侧": "降低买",
+        "暂停买入侧": "暂停买",
+        "暂停买入": "暂停买",
+        "降低买入侧": "高位保护",
+        "降低买": "高位保护",
+        "降买": "高位保护",
+        "只保留卖出": "只卖清仓",
         "提高买入侧": "提高买",
         "网格买入侧": "网格买",
         "买入侧": "买",
@@ -1751,12 +1803,22 @@ def _compact_action(action: str) -> str:
 
 def _compact_grid_action(action: str) -> str:
     display = _display_action(action)
+    if "只卖清仓" in display:
+        return "只卖清仓"
+    if "弱势减仓" in display:
+        return "弱减"
+    if "高位保护" in display:
+        return "保护"
+    if "趋势加仓" in display:
+        return "趋势加仓"
+    if "趋势持有" in display:
+        return "趋势持有"
     if "暂不设" in display:
         return "暂不设"
     if "新建" in display:
         return "新建"
     if "只保留卖出" in display:
-        return "只卖"
+        return "只卖清仓"
     if "暂停" in display:
         return "暂停买"
     if "人工复核" in display:
@@ -1785,7 +1847,7 @@ def _nav_meta(item: dict | None) -> str:
     if position_pct is not None:
         parts.append(f"{_pct(position_pct)}")
     elif target_pct is not None:
-        parts.append(f"目标 {_pct(target_pct)}")
+        parts.append(f"趋势参考 {_pct(target_pct)}")
     pct_chg = item.get("pct_chg")
     if pct_chg is not None:
         parts.append(_signed_pct(pct_chg))

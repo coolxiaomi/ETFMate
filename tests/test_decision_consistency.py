@@ -14,7 +14,7 @@ from etfmate.analysis.recommendation import recommend
 from etfmate.analysis.trade_reviewer import review_trade_periods
 from etfmate.browser.ths_account import extract_watchlist
 from etfmate.cli import _position as _cli_position
-from etfmate.report.daily_report import _ai_judgement_html, _holding_view, render_html
+from etfmate.report.daily_report import _ai_judgement_html, _compact_grid_action, _holding_view, render_html
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position, Trade
 
 
@@ -99,7 +99,9 @@ def test_high_risk_zero_target_should_not_be_downgraded_to_hold(monkeypatch):
 
     assert decision["position_action"] in {"REDUCE", "TREND_REVIEW", "EXIT_TREND_POSITION"}
     assert decision["action"] != "持有"
-    assert any("目标仓位为 0" in reason for reason in decision["reasons"])
+    assert decision["account_mode"] == "TREND_TRADING"
+    assert decision["trend_trade_mode"] == "ONLY_SELL_OR_CLEAR"
+    assert any("只卖/清仓候选" in reason or "买入侧必须归零" in reason for reason in decision["reasons"])
 
 
 def test_rule_engine_outputs_short_trend_only_without_legacy_total_scores(monkeypatch):
@@ -375,8 +377,9 @@ def test_high_risk_zero_target_grid_must_not_keep_normal_buy_side():
         layered_context={"confidence": 22, "total_score": -3},
     )
 
-    assert advice["action"] in {"暂停买入侧", "只保留卖出", "人工复核"}
-    assert advice["suggested_buy_quantity"] is None
+    assert advice["action"] == "只卖清仓"
+    assert advice["grid_mode"] == "ONLY_SELL_OR_CLEAR"
+    assert advice["suggested_buy_quantity"] == 0
 
 
 def test_zero_target_reduce_grid_switches_to_sell_only_even_before_high_risk():
@@ -401,8 +404,9 @@ def test_zero_target_reduce_grid_switches_to_sell_only_even_before_high_risk():
         },
     )
 
-    assert advice["action"] in {"暂停买入侧", "只保留卖出"}
-    assert advice["suggested_buy_quantity"] is None
+    assert advice["action"] == "只卖清仓"
+    assert advice["grid_mode"] == "ONLY_SELL_OR_CLEAR"
+    assert advice["suggested_buy_quantity"] == 0
 
 
 def test_grid_confirmation_pct_uses_base_price_buckets_and_stays_equal():
@@ -631,7 +635,7 @@ def test_profitable_strong_trend_grid_keeps_existing_sell_rise_when_bias_not_ext
 
     assert advice["grid_purpose"] == "加仓网格"
     assert advice["suggested_sell_rise_pct"] == 5.15
-    assert advice["suggested_sell_quantity"] == 1000
+    assert advice["suggested_sell_quantity"] == 500
     assert advice["suggested_buy_quantity"] == 1000
     assert any("卖出触发不因 ATR 公式收紧" in reason for reason in advice["reasons"])
     assert not any("胜率优先护栏触发" in reason for reason in advice["reasons"])
@@ -662,11 +666,73 @@ def test_weak_loss_grid_does_not_keep_normal_buy_side():
         kline_days=240,
     )
 
-    advice = advise_grid(grid, market, position)
+    advice = advise_grid(
+        grid,
+        market,
+        position,
+        rule_decision={
+            "action": "减仓",
+            "position_action": "REDUCE",
+            "trend_score": 57,
+            "risk_level": "MEDIUM",
+            "trend_overheat_level": "NONE",
+        },
+    )
 
-    assert advice["action"] == "降低买入侧"
+    assert advice["action"] == "弱势减仓"
+    assert advice["grid_mode"] == "WEAK_REDUCE"
+    assert advice["suggested_buy_quantity"] == 0
     assert advice["suggested_buy_quantity"] < advice["suggested_sell_quantity"]
     assert any("不用于鼓励补仓" in reason or "买入侧降速" in reason for reason in advice["reasons"])
+
+
+def test_trend_grid_sell_quantity_never_exceeds_current_position_for_report_examples():
+    examples = [
+        ("515880", "通信ETF国泰", 1100, 1500, 86, "OVERHEATED"),
+        ("159781", "科创创业ETF易方达", 1000, 1500, 80, "OVERHEATED"),
+        ("562950", "消费电子ETF易方达", 100, 1000, 73, "OVERHEATED"),
+        ("159516", "半导体设备ETF国泰", 1000, 1500, 68, "SEVERE_OVERHEATED"),
+    ]
+    for code, name, quantity, raw_sell_qty, trend_score, overheat_level in examples:
+        position = Position(code, name, quantity, 1.0, 1.2, quantity * 1.2, 0, 12, position_pct=3)
+        grid = GridConfig(code=code, name=name, enabled=True, order_quantity=raw_sell_qty, sell_quantity=raw_sell_qty, buy_quantity=raw_sell_qty)
+        market = MarketSnapshot(
+            code=code,
+            name=name,
+            last_price=1.2,
+            pct_chg=1.0,
+            volume=1_000_000,
+            amount=100_000_000,
+            boll_upper=1.2,
+            boll_position=0.98,
+            rsi6=78,
+            bias12=8,
+            atr14_pct=3.0,
+            kline_days=240,
+        )
+
+        advice = advise_grid(
+            grid,
+            market,
+            position,
+            rule_decision={
+                "action": "持有或小幅减仓",
+                "position_action": "HOLD_OR_REDUCE",
+                "trend_score": trend_score,
+                "risk_level": "MEDIUM",
+                "trend_overheat_level": overheat_level,
+            },
+        )
+
+        assert advice["grid_mode"] == "PROFIT_PROTECTION"
+        assert advice["suggested_sell_quantity"] <= quantity
+        assert advice["suggested_buy_quantity"] in {0, 100}
+        assert advice["suggested_sell_quantity"] % 100 == 0
+
+
+def test_weak_trend_report_grid_label_is_not_lower_buy():
+    assert _compact_grid_action("只卖清仓") == "只卖清仓"
+    assert _compact_grid_action("弱势减仓") == "弱减"
 
 
 def test_watchlist_open_generates_new_grid_without_existing_touker_grid():
