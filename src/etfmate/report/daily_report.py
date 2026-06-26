@@ -1123,7 +1123,12 @@ def _grid_sell_row(item: dict) -> dict[str, Any]:
     return _row(
         "卖",
         _grid_sell_text(item.get("current_sell_rise_pct"), item.get("current_sell_pullback_pct"), current_qty),
-        _grid_sell_text(item.get("suggested_sell_rise_pct"), item.get("suggested_sell_pullback_pct"), suggested_qty),
+        _grid_sell_text(
+            item.get("suggested_sell_rise_pct"),
+            item.get("suggested_sell_pullback_pct"),
+            suggested_qty,
+            item.get("sell_execution_status"),
+        ),
         _span("需调整", "warn") if changed else "",
     )
 
@@ -1142,7 +1147,12 @@ def _grid_buy_row(item: dict) -> dict[str, Any]:
     return _row(
         "买",
         _grid_buy_text(item.get("current_buy_fall_pct"), item.get("current_buy_rebound_pct"), current_qty),
-        _grid_buy_text(item.get("suggested_buy_fall_pct"), item.get("suggested_buy_rebound_pct"), suggested_qty),
+        _grid_buy_text(
+            item.get("suggested_buy_fall_pct"),
+            item.get("suggested_buy_rebound_pct"),
+            suggested_qty,
+            item.get("buy_execution_status"),
+        ),
         _span("需调整", "warn") if changed else "",
     )
 
@@ -1163,7 +1173,7 @@ def _grid_position_limit_row(item: dict) -> dict[str, Any]:
     )
 
 
-def _grid_sell_text(rise: Any, pullback: Any, qty: Any) -> str:
+def _grid_sell_text(rise: Any, pullback: Any, qty: Any, status: Any = None) -> str:
     return "".join(
         [
             "涨",
@@ -1171,12 +1181,12 @@ def _grid_sell_text(rise: Any, pullback: Any, qty: Any) -> str:
             "，回落",
             _grid_pct_html(pullback, "loss", "-"),
             "，",
-            _grid_qty_html(qty),
+            _grid_side_qty_html(qty, "sell", status),
         ]
     )
 
 
-def _grid_buy_text(fall: Any, rebound: Any, qty: Any) -> str:
+def _grid_buy_text(fall: Any, rebound: Any, qty: Any, status: Any = None) -> str:
     return "".join(
         [
             "跌",
@@ -1184,7 +1194,7 @@ def _grid_buy_text(fall: Any, rebound: Any, qty: Any) -> str:
             "，反弹",
             _grid_pct_html(rebound, "profit", "+"),
             "，",
-            _grid_qty_html(qty),
+            _grid_side_qty_html(qty, "buy", status),
         ]
     )
 
@@ -1205,6 +1215,23 @@ def _grid_qty_html(value: Any) -> str:
     if number is None:
         return "-"
     return f'<span class="attention">{number:.0f}股</span>'
+
+
+def _grid_side_qty_html(value: Any, side: str, status: Any = None) -> str:
+    status_text = str(status or "")
+    if status_text in {"DISABLED", "INVALID_PRICE"}:
+        return _span("停买" if side == "buy" else "暂不卖", "attention")
+    if status_text in {"NO_TRADABLE_LOT", "BELOW_MIN_LOT"}:
+        return _span("不足一手" if side == "sell" else "不可买", "attention")
+    number = _float_or_none(value)
+    if number is None:
+        return "-"
+    if number < 100:
+        return _span("停买" if side == "buy" and number <= 0 else "不足一手", "attention")
+    rounded = int(number) // 100 * 100
+    if rounded < 100:
+        return _span("不足一手", "attention")
+    return f'<span class="attention">{rounded:.0f}股</span>'
 
 
 def _rule_score_summary(item: dict) -> str:

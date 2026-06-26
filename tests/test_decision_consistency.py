@@ -14,7 +14,7 @@ from etfmate.analysis.recommendation import recommend
 from etfmate.analysis.trade_reviewer import review_trade_periods
 from etfmate.browser.ths_account import extract_watchlist
 from etfmate.cli import _position as _cli_position
-from etfmate.report.daily_report import _ai_judgement_html, _compact_grid_action, _holding_view, render_html
+from etfmate.report.daily_report import _ai_judgement_html, _compact_grid_action, _grid_table_html, _holding_view, render_html
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position, Trade
 
 
@@ -379,7 +379,8 @@ def test_high_risk_zero_target_grid_must_not_keep_normal_buy_side():
 
     assert advice["action"] == "只卖清仓"
     assert advice["grid_mode"] == "ONLY_SELL_OR_CLEAR"
-    assert advice["suggested_buy_quantity"] == 0
+    assert advice["suggested_buy_quantity"] is None
+    assert advice["buy_execution_status"] == "DISABLED"
 
 
 def test_zero_target_reduce_grid_switches_to_sell_only_even_before_high_risk():
@@ -406,7 +407,8 @@ def test_zero_target_reduce_grid_switches_to_sell_only_even_before_high_risk():
 
     assert advice["action"] == "只卖清仓"
     assert advice["grid_mode"] == "ONLY_SELL_OR_CLEAR"
-    assert advice["suggested_buy_quantity"] == 0
+    assert advice["suggested_buy_quantity"] is None
+    assert advice["buy_execution_status"] == "DISABLED"
 
 
 def test_grid_confirmation_pct_uses_base_price_buckets_and_stays_equal():
@@ -538,7 +540,7 @@ def test_profitable_upper_band_grid_does_not_move_base_to_current_price():
 
     assert advice["base_price_status"] == "维持现有基准"
     assert advice["suggested_base_price"] == 1.0
-    assert advice["suggested_sell_quantity"] >= advice["suggested_buy_quantity"]
+    assert advice["suggested_sell_quantity"] >= (advice["suggested_buy_quantity"] or 0)
 
 
 def test_profitable_strong_trend_grid_keeps_profit_room():
@@ -681,9 +683,39 @@ def test_weak_loss_grid_does_not_keep_normal_buy_side():
 
     assert advice["action"] == "弱势减仓"
     assert advice["grid_mode"] == "WEAK_REDUCE"
-    assert advice["suggested_buy_quantity"] == 0
-    assert advice["suggested_buy_quantity"] < advice["suggested_sell_quantity"]
+    assert advice["suggested_buy_quantity"] is None
+    assert advice["buy_execution_status"] == "DISABLED"
+    assert advice["suggested_sell_quantity"] >= 100
     assert any("不用于鼓励补仓" in reason or "买入侧降速" in reason for reason in advice["reasons"])
+
+
+def test_disabled_grid_side_does_not_render_zero_share_order():
+    grid = GridConfig(
+        code="159999",
+        name="测试ETF",
+        enabled=True,
+        order_quantity=200,
+        buy_fall_pct=3,
+        sell_rise_pct=3,
+    )
+    advice = advise_grid(
+        grid,
+        _market(),
+        _position(),
+        rule_decision={
+            "action": "退出短线仓位",
+            "position_action": "EXIT_SHORT_TERM",
+            "trend_score": 20,
+            "risk_level": "HIGH",
+            "target_position_ratio": 0,
+        },
+    )
+
+    html = _grid_table_html(advice)
+
+    assert advice["suggested_buy_quantity"] is None
+    assert "停买" in html
+    assert re.search(r"(?<!\d)0股", html) is None
 
 
 def test_trend_grid_sell_quantity_never_exceeds_current_position_for_report_examples():
@@ -726,7 +758,7 @@ def test_trend_grid_sell_quantity_never_exceeds_current_position_for_report_exam
 
         assert advice["grid_mode"] == "PROFIT_PROTECTION"
         assert advice["suggested_sell_quantity"] <= quantity
-        assert advice["suggested_buy_quantity"] in {0, 100}
+        assert advice["suggested_buy_quantity"] in {None, 100}
         assert advice["suggested_sell_quantity"] % 100 == 0
 
 

@@ -149,7 +149,7 @@ def _validate_touker_grids(grid_payload: dict[str, Any], errors: list[str], warn
             if _missing_required(item, names):
                 errors.append(f"Touker 网格 {label} 缺少 {field_label} 字段。")
         if all(_missing_required(item, names) for names in (("order_quantity", "orderQuantity", "entrustAmount", "委托股数"), ("buy_quantity", "buyQuantity", "buyAmount", "买入股数"), ("sell_quantity", "sellQuantity", "sellAmount", "卖出股数"))):
-            errors.append(f"Touker 网格 {label} 缺少委托/买入/卖出数量字段。")
+            warnings.append(f"Touker 网格 {label} 未识别到委托/买入/卖出数量字段（网格建议会使用底仓/持仓上限替代）。")
         if _missing_required(item, ("min_base_quantity", "minBaseQuantity", "最小底仓")):
             warnings.append(f"Touker 网格 {label} 未识别到最小底仓字段。")
         if _missing_required(item, ("max_position_quantity", "maxPositionQuantity", "最大持仓")):
@@ -265,7 +265,10 @@ def _missing_required(item: dict[str, Any], names: tuple[str, ...]) -> bool:
         return True
     if len(names) == 1 and names[0] in {"name", "名称", "证券名称"}:
         return not str(value).strip()
-    return _num(value) <= 0 if _looks_numeric_field(names) else False
+    # If _pick found a non-empty non-placeholder value, it's present —
+    # do NOT reject numeric fields just because they are negative
+    # (e.g. sell_pullback_pct="-0.20" is a valid grid parameter).
+    return False
 
 
 def _looks_numeric_field(names: tuple[str, ...]) -> bool:

@@ -145,6 +145,8 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
                     "grid_mode": grid.get("grid_mode"),
                     "grid_mode_label": grid.get("grid_mode_label"),
                     "execution_checks": grid.get("execution_checks"),
+                    "buy_execution_status": grid.get("buy_execution_status"),
+                    "sell_execution_status": grid.get("sell_execution_status"),
                     "cash_constraint_status": grid.get("cash_constraint_status"),
                     "grid_applicable": grid.get("grid_applicable"),
                     "grid_purpose": grid.get("grid_purpose"),

@@ -46,4 +46,4 @@
 1. `ONLY_SELL_OR_CLEAR` 展示为“只卖清仓”或“只卖/清仓候选”，不得压缩成“降低买”。
 2. `WEAK_REDUCE` 展示为“弱势减仓”，不得让用户误解为仍保留正常买入网格。
 3. `PROFIT_PROTECTION` 展示为“高位保护”，强调降买和分批兑现。
-4. 报告中的买卖数量必须使用 `execution_checks` 修正后的 `suggested_buy_quantity` / `suggested_sell_quantity`。
+4. 报告中的买卖数量必须使用 `execution_checks` 修正后的 `suggested_buy_quantity` / `suggested_sell_quantity`；停用买入侧显示“停买”，不得显示 `0股` 条件单。

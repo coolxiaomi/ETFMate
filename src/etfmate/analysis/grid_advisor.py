@@ -204,7 +204,7 @@ def advise_grid(
         suggested_sell_qty,
     )
     reasons.append(mode_reason)
-    suggested_buy_qty, suggested_sell_qty, execution_checks = _apply_execution_checks(
+    suggested_buy_qty, suggested_sell_qty, execution_checks, buy_execution_status, sell_execution_status = _apply_execution_checks(
         grid_mode,
         position,
         market,
@@ -229,6 +229,8 @@ def advise_grid(
         "grid_mode": grid_mode,
         "grid_mode_label": _grid_mode_label(grid_mode),
         "execution_checks": execution_checks,
+        "buy_execution_status": buy_execution_status,
+        "sell_execution_status": sell_execution_status,
         "cash_constraint_status": _cash_constraint_status(position),
         "grid_applicable": True,
         "grid_purpose": grid_purpose,
@@ -399,7 +401,7 @@ def _apply_trend_grid_mode(
             sell_rise,
             0,
             next_sell,
-            "趋势不强，网格切换为弱势减仓：买入归零或停用，反弹分批卖出",
+            "趋势不强，网格切换为弱势减仓：买入侧停用，反弹分批卖出",
         )
     if mode == "ONLY_SELL_OR_CLEAR":
         return (
@@ -407,7 +409,7 @@ def _apply_trend_grid_mode(
             sell_rise,
             0,
             current_qty,
-            "趋势失效，网格切换为只卖清仓：买入必须为 0，卖出不超过当前持仓",
+            "趋势失效，网格切换为只卖清仓：买入侧停用，卖出不超过当前持仓",
         )
     return buy_fall, sell_rise, 0, 0, "规则禁止交易或数据不可用，本次暂停网格"
 
@@ -418,26 +420,48 @@ def _apply_execution_checks(
     market: MarketSnapshot,
     buy_qty: float | None,
     sell_qty: float | None,
-) -> tuple[float | None, float | None, list[dict[str, Any]]]:
+) -> tuple[float | None, float | None, list[dict[str, Any]], str, str]:
     checks: list[dict[str, Any]] = []
     current_qty = _round_lot_down(position.quantity) if position else 0
-    normalized_buy = _round_lot_down(buy_qty or 0)
-    normalized_sell = _round_lot_down(sell_qty or 0)
-    if mode in {"WEAK_REDUCE", "ONLY_SELL_OR_CLEAR", "PAUSE"} and normalized_buy != 0:
-        normalized_buy = 0
-        checks.append({"check": "weak_trend_buy_zero", "status": "fixed", "message": "趋势偏弱或暂停模式下，买入数量已修正为 0"})
-    if position and normalized_sell > current_qty:
-        normalized_sell = current_qty
-        checks.append({"check": "sell_qty_lte_position", "status": "fixed", "message": "卖出数量超过当前持仓，已按持仓上限自动修正"})
+    buy_status = "ACTIVE"
+    sell_status = "ACTIVE"
+    if mode in {"WEAK_REDUCE", "ONLY_SELL_OR_CLEAR", "PAUSE"}:
+        normalized_buy = None
+        buy_status = "DISABLED"
+        checks.append({"check": "buy_side_disabled", "status": "fixed", "message": "趋势偏弱或暂停模式下，买入侧已标记为停用，不输出 0 股条件单"})
+    elif market.last_price <= 0:
+        normalized_buy = None
+        buy_status = "INVALID_PRICE"
+        checks.append({"check": "valid_price", "status": "fixed", "message": "最新价无效，买入侧已标记为不可执行"})
+    elif buy_qty is None:
+        normalized_buy = None
+        buy_status = "DISABLED"
     else:
-        checks.append({"check": "sell_qty_lte_position", "status": "ok", "message": ""})
-    if normalized_buy % 100 != 0 or normalized_sell % 100 != 0:
-        checks.append({"check": "round_lot", "status": "fixed", "message": "买卖数量已按 100 股整数倍向下修正"})
+        normalized_buy = _round_order_lot(buy_qty)
+
+    if not position or current_qty < 100:
+        normalized_sell = None
+        sell_status = "NO_TRADABLE_LOT"
+        checks.append({"check": "sell_side_has_lot", "status": "fixed", "message": "当前持仓不足一手，卖出侧不输出 0 股条件单"})
+    elif sell_qty is None or sell_qty <= 0:
+        normalized_sell = None
+        sell_status = "DISABLED"
+    else:
+        normalized_sell = _round_lot_down(sell_qty)
+        if normalized_sell < 100:
+            normalized_sell = None
+            sell_status = "BELOW_MIN_LOT"
+            checks.append({"check": "sell_side_min_lot", "status": "fixed", "message": "卖出侧不足一手，已标记为暂不设置卖出条件单"})
+        elif normalized_sell > current_qty:
+            normalized_sell = current_qty
+            checks.append({"check": "sell_qty_lte_position", "status": "fixed", "message": "卖出数量超过当前持仓，已按持仓上限自动修正"})
+        else:
+            checks.append({"check": "sell_qty_lte_position", "status": "ok", "message": ""})
+
+    if _was_lot_fixed(buy_qty, normalized_buy) or _was_lot_fixed(sell_qty, normalized_sell):
+        checks.append({"check": "round_lot", "status": "fixed", "message": "买卖数量已按 100 股整数倍修正，且不输出 0 股条件单"})
     checks.append({"check": "buy_cash", "status": "unknown", "message": "当前未采集可用现金，买入数量不按单只仓位上限放大"})
-    if market.last_price <= 0 and normalized_buy:
-        normalized_buy = 0
-        checks.append({"check": "valid_price", "status": "fixed", "message": "最新价无效，买入数量已修正为 0"})
-    return normalized_buy, normalized_sell, checks
+    return normalized_buy, normalized_sell, checks, buy_status, sell_status
 
 
 def _cash_constraint_status(position: Position | None) -> str:
@@ -686,10 +710,24 @@ def _round_qty(value: float) -> float:
     return max(100, round(value / 100) * 100)
 
 
+def _round_order_lot(value: float | None) -> float | None:
+    if value is None or value <= 0:
+        return None
+    return max(100, _round_lot_down(value) or 100)
+
+
 def _round_lot_down(value: float | None) -> float:
     if value is None or value <= 0:
         return 0
     return (int(value) // 100) * 100
+
+
+def _was_lot_fixed(original: float | None, normalized: float | None) -> bool:
+    if original is None or original <= 0:
+        return False
+    if normalized is None:
+        return True
+    return abs(float(original) - float(normalized)) > 1e-9
 
 
 def _num_or_zero(value: Any) -> float:

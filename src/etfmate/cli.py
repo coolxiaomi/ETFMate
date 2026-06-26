@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -172,7 +173,7 @@ def run_analyze(root: Path, run_id: str) -> None:
         "watchlist_filtered_count": len(watchlist_filtered),
         "watchlist": watchlist,
         "watchlist_filtered_out": watchlist_filtered,
-        "market_snapshots": snapshots,
+        "market_snapshots": [asdict(s) for s in snapshots],
         "layered_contexts": {code: context_to_dict(context) for code, context in layered_contexts.items()},
         "recommendations": recommendations,
         "grid_advices": grid_advices,

@@ -93,8 +93,8 @@ runtime/
 修改 ETFMate Python 代码或报告模板后，至少验证：
 
 - 趋势交易账户契约：规则输出必须包含 `account_mode=TREND_TRADING`、`trend_overheat_level`、`trend_trade_mode` 和 `execution_mode`；报告和 AI 输入不得只围绕配置型目标仓位解释。
-- 高风险或短线转弱：`ShortTrendScore < 45` 或退出短线仓位时，动作必须进入卖出/清仓候选语义；网格 `grid_mode` 必须是 `ONLY_SELL_OR_CLEAR`，买入数量为 0。
-- 执行层数量校验：卖出数量不得超过当前持仓，买卖数量必须为 100 股整数倍；历史样例 515880、159781、562950、159516 不得再出现卖出数量超过持仓。
+- 高风险或短线转弱：`ShortTrendScore < 45` 或退出短线仓位时，动作必须进入卖出/清仓候选语义；网格 `grid_mode` 必须是 `ONLY_SELL_OR_CLEAR`，买入侧用 `buy_execution_status=DISABLED` 表示停用，不得输出 `0股` 条件单。
+- 执行层数量校验：卖出数量不得超过当前持仓，买卖数量必须为 100 股整数倍；停用侧用状态字段表达，不得渲染为 `0股`；历史样例 515880、159781、562950、159516 不得再出现卖出数量超过持仓。
 - 组合仓位超限：组合总仓位超过 80% 时，禁止新增 `ADD/OPEN/LIGHT_OPEN`；
 - AI 未启用：`ai_enabled=false` 或 `ai_confidence=0` 时，只展示“AI复核未启用，本次采用规则引擎”。
 - 证据置信度不足：七层证据未完整接入只作复核提示；只有多层证据方向偏弱、风险未确认、仓位偏高或量能确认不足时才降速。

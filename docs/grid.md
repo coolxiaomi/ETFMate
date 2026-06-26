@@ -157,6 +157,8 @@ current_buy_quantity
 current_sell_quantity
 suggested_buy_quantity
 suggested_sell_quantity
+buy_execution_status
+sell_execution_status
 current_min_base_quantity
 suggested_min_base_quantity
 current_max_position_quantity
@@ -200,8 +202,8 @@ rule_decision
 | TREND_HOLD_GRID | 趋势持有 | 趋势仍好，保留趋势仓，买卖均衡 |
 | PROFIT_PROTECTION | 高位保护 | 趋势好但过热，降买并分批兑现 |
 | BALANCED_GRID | 震荡滚动 | 震荡偏强，小额滚动 |
-| WEAK_REDUCE | 弱势减仓 | 趋势不强，买入归零或停用，反弹卖出 |
-| ONLY_SELL_OR_CLEAR | 只卖清仓 | 趋势失效，买入为 0，卖出不超过持仓 |
+| WEAK_REDUCE | 弱势减仓 | 趋势不强，买入侧停用，反弹卖出 |
+| ONLY_SELL_OR_CLEAR | 只卖清仓 | 趋势失效，买入侧停用，卖出不超过持仓 |
 | PAUSE | 暂停 | 禁止交易或数据不可用 |
 
 `grid_purpose` 必须归一为唯一目的：
@@ -319,7 +321,7 @@ A 股一手规则：
 
 1. 当前持仓很小时，买入数量不得明显超过现有持仓。
 2. 卖出数量不得超过当前持仓数量。
-3. 趋势交易模式下，`WEAK_REDUCE` / `ONLY_SELL_OR_CLEAR` / `PAUSE` 可以明确输出买入数量 0，表示本次建议停用买入侧或不新设买入条件。
+3. 趋势交易模式下，`WEAK_REDUCE` / `ONLY_SELL_OR_CLEAR` / `PAUSE` 必须用 `buy_execution_status=DISABLED` 和 `suggested_buy_quantity=null` 表示停用买入侧，不得把停用侧渲染成 `0股` 条件单。
 4. 买入侧降速时，通常将买入数量降为基础数量的 50%，卖出侧保持基础数量。
 5. 盈利保护且趋势/风险确认不足时，卖出侧可提高到基础数量的 1.5 倍。
 6. 盈利且趋势健康时，不因 ATR 公式把现有卖出上升幅度收紧；已有 Touker 卖出触发更宽时沿用现有触发，以保留趋势利润空间。
@@ -359,6 +361,7 @@ sell_quantity = 基础数量
 ```text
 trend_score >= 30 -> 只保留卖出
 trend_score < 30  -> 暂停买入侧
+buy_execution_status = DISABLED
 suggested_buy_quantity = null
 suggested_sell_quantity = 基础数量
 ```
@@ -436,6 +439,8 @@ suggested_base_price
 current/suggested 买入下跌、买入反弹、卖出上升、卖出回落
 suggested_buy_quantity
 suggested_sell_quantity
+buy_execution_status
+sell_execution_status
 suggested_min_base_quantity
 suggested_max_position_quantity
 ```
@@ -447,7 +452,7 @@ HTML 报告中：
 1. 有网格建议时，嵌入完整网格表。
 2. `grid_applicable=false` 时，只显示暂不设网格原因。
 3. 报告展示优先使用 `grid_mode_label`，弱趋势不得再把“只卖清仓/弱势减仓”压缩成“降低买”。
-4. 报告展示的买卖数量必须来自执行校验后的结果；卖出不得超过当前持仓，弱趋势买入为 0。
+4. 报告展示的买卖数量必须来自执行校验后的结果；卖出不得超过当前持仓；弱趋势、暂停或只卖模式下买入侧显示“停买”，不得显示 `0股`。
 
 ## 15. 回归测试
 
