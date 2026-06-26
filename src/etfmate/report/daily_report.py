@@ -110,6 +110,7 @@ def _etf_view(item: dict) -> dict[str, Any]:
     grid_short = _compact_grid_action(grid_action)
     is_held = bool(rec and (_float_or_none(rec.get("quantity")) or 0) > 0)
     is_grid = bool(grid and grid.get("grid_applicable") is not False)
+    is_strategy = bool(grid and grid.get("execution_plan_type"))
     is_pool = _is_clean_watchlist_item(rec)
     trend_score = _float_or_none(rec.get("rule_trend_score")) if rec else None
     holding_pct = _float_or_none(rec.get("holding_pct")) if rec else None
@@ -124,8 +125,9 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "name": str(name),
         "is_held": is_held,
         "is_grid": is_grid,
+        "is_strategy": is_strategy,
         "is_pool": is_pool,
-        "filter_tags": _filter_tags(is_held, is_grid, is_pool),
+        "filter_tags": _filter_tags(is_held, is_grid, is_pool, is_strategy),
         "pnl_class": pnl_class,
         "pnl_text": _pnl_text(rec),
         "holding_pct_value": holding_pct,
@@ -145,11 +147,11 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "nav_heat_class": nav["heat_class"],
         "nav_heat_tip": nav["heat_tip"],
         "nav_meta": nav["meta"],
-        "grid_action_short": grid_short,
+        "grid_action_short": grid_short if is_grid else _compact_strategy_action(grid),
         "grid_action_class": _grid_action_class(grid_action),
         "title_meta": _title_meta(rec, grid),
         "action_pill": _pill(_compact_action(_display_action(action)), _action_class(action)),
-        "grid_pill": _pill(f"网格:{_display_action(grid_action)}", _grid_action_class(grid_action)),
+        "grid_pill": _grid_or_strategy_pill(grid, grid_action),
         "holding": _holding_view(rec, grid),
     }
 
@@ -166,7 +168,7 @@ def _holding_view(item: dict | None, grid: dict | None = None) -> dict[str, Any]
         _row("RSI(相对强弱)", _rsi_summary(item), _rsi_compare(item), _rsi_alert(item)),
         _row("MACD(指数平滑异同)", _macd_summary(item), _macd_compare(item), _macd_alert(item)),
         _row("规则", _rule_score_summary(item), _rule_score_detail(item), _rule_score_alert(item)),
-        _merged_row("网格", _grid_table_html(grid)),
+        _merged_row(_grid_section_label(grid), _grid_table_html(grid)),
         _merged_row("综合结论", _combined_conclusion_html(item)),
         _merged_row("明细", _detail_drawer_html(item)),
     ]
@@ -176,6 +178,8 @@ def _holding_view(item: dict | None, grid: dict | None = None) -> dict[str, Any]
 def _grid_view(item: dict | None) -> dict[str, Any]:
     if not item:
         return {"empty": True, "message": "无 Touker 网格配置。", "rows": []}
+    if item.get("execution_plan_type"):
+        return {"empty": False, "message": "", "rows": [_merged_row("策略", _execution_plan_html(item))]}
     if item.get("grid_applicable") is False:
         reasons = "；".join(item.get("reasons") or [])
         return {"empty": True, "message": reasons or "当前不适合建仓，本次暂不设网格。", "rows": []}
@@ -215,6 +219,57 @@ def _grid_table_html(item: dict | None) -> str:
         f"<tbody>{''.join(body)}</tbody>"
         "</table>"
         "</div>"
+    )
+
+
+def _grid_or_strategy_pill(grid: dict | None, grid_action: str) -> str:
+    if not grid:
+        return _pill("网格:无网格", "neutral")
+    if grid.get("execution_plan_type"):
+        label = _compact_strategy_action(grid)
+        return _pill(f"策略:{label}", _grid_action_class(str(grid.get("execution_plan_label") or grid_action)))
+    return _pill(f"网格:{_display_action(grid_action)}", _grid_action_class(grid_action))
+
+
+def _compact_strategy_action(grid: dict | None) -> str:
+    if not grid:
+        return "无网格"
+    plan_type = str(grid.get("execution_plan_type") or "")
+    label = str(grid.get("execution_plan_label") or grid.get("grid_mode_label") or grid.get("action") or "")
+    if plan_type == "CLEAR_PLAN" or "清仓" in label or "退出" in label:
+        return "清仓"
+    if plan_type == "REDUCE_PLAN" or "减仓" in label:
+        return "减仓"
+    if plan_type == "PAUSE_PLAN" or "暂停" in label:
+        return "暂停"
+    return _compact_grid_action(label)
+
+
+def _grid_section_label(grid: dict | None) -> str:
+    return "执行策略" if grid and grid.get("execution_plan_type") else "网格"
+
+
+def _execution_plan_html(item: dict) -> str:
+    plan_label = str(item.get("execution_plan_label") or "执行策略")
+    sell_plan = _grid_sell_text(
+        item.get("suggested_sell_rise_pct"),
+        item.get("suggested_sell_pullback_pct"),
+        item.get("suggested_sell_quantity"),
+        item.get("sell_execution_status"),
+    )
+    existing = "有" if item.get("has_existing_grid") else "无"
+    return _join_html(
+        [
+            _span(plan_label, _grid_action_class(plan_label)),
+            _inline_label("结论", item.get("execution_plan_summary")),
+            _inline_label("性质", "不属于网格建议；网格必须同时有买入和卖出两侧，单边卖出只能作为减仓/清仓执行策略"),
+            _inline_label("原 Touker 双边网格", existing),
+            _inline_label("基准", item.get("base_price_status")),
+            _inline_label("参考基准", _format_with_suffix(item.get("suggested_base_price"), "")),
+            f'<span class="inline-label">卖出计划：</span>{sell_plan}',
+            _inline_label("买入侧处理", "停用或删除买入条件单，不通过增大网格间距伪装成停用买入侧"),
+            _inline_label("依据", "；".join(item.get("reasons") or [])),
+        ]
     )
 
 
@@ -290,12 +345,14 @@ def _portfolio_stats(recommendations: list[dict], grid_advices: list[dict], data
     }
 
 
-def _filter_tags(is_held: bool, is_grid: bool, is_pool: bool) -> str:
+def _filter_tags(is_held: bool, is_grid: bool, is_pool: bool, is_strategy: bool = False) -> str:
     tags = ["all"]
     if is_held:
         tags.append("held")
     if is_grid:
         tags.append("grid")
+    if is_strategy:
+        tags.append("strategy")
     if is_pool:
         tags.append("pool")
     return " ".join(tags)
@@ -359,6 +416,7 @@ def _nav_dashboard(etfs: list[dict[str, Any]]) -> dict[str, Any]:
         "holding": _holding_pie(etfs),
         "pnl": _pnl_dashboard(etfs),
         "grid_groups": _grid_groups(etfs),
+        "strategy_groups": _strategy_groups(etfs),
         "risk_summary": _risk_summary(etfs),
         "risk_items": _risk_items(etfs),
     }
@@ -408,23 +466,51 @@ def _holding_pie(etfs: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _pnl_dashboard(etfs: list[dict[str, Any]]) -> dict[str, Any]:
-    items = _sort_etfs_for_display([item for item in etfs if item.get("pnl_class") in {"profit", "loss"}])
+    items = [item for item in etfs if item.get("pnl_class") in {"profit", "loss"}]
     max_abs = max((abs(_float_or_none_from_text(item.get("pnl_text")) or 0) for item in items), default=0)
     rows = []
     for item in items:
         value = _float_or_none_from_text(item.get("pnl_text")) or 0
-        rows.append({**item, "pnl_value": f"{value:+.2f}%", "width": f"{0 if max_abs <= 0 else max(4, min(100, abs(value) / max_abs * 100)):.1f}"})
+        width = f"{0 if max_abs <= 0 else max(4, min(100, abs(value) / max_abs * 100)):.1f}"
+        rows.append(
+            {
+                **item,
+                "pnl_raw_value": value,
+                "pnl_value": f"{value:+.2f}%",
+                "width": width,
+            }
+        )
+    profit_rows = sorted((row for row in rows if row["pnl_raw_value"] > 0), key=lambda row: (-row["pnl_raw_value"], str(row.get("code") or "")))
+    loss_rows = sorted((row for row in rows if row["pnl_raw_value"] < 0), key=lambda row: (row["pnl_raw_value"], str(row.get("code") or "")))
     return {
-        "profit_count": sum(1 for item in rows if item["pnl_class"] == "profit"),
-        "loss_count": sum(1 for item in rows if item["pnl_class"] == "loss"),
-        "rows": rows,
+        "profit_count": len(profit_rows),
+        "loss_count": len(loss_rows),
+        "profit_rows": profit_rows,
+        "loss_rows": loss_rows,
     }
 
 
 def _grid_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for etf in etfs:
+        if not etf.get("is_grid"):
+            continue
         groups.setdefault(str(etf.get("grid_action_short") or "无网格"), []).append(etf)
+    return [
+        {"action": key, "count": len(items), "class": items[0].get("grid_action_class", "neutral"), "etfs": items}
+        for key, items in (
+            (key, _sort_etfs_for_display(items))
+            for key, items in sorted(groups.items(), key=lambda pair: (-len(pair[1]), pair[0]))
+        )
+    ]
+
+
+def _strategy_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for etf in etfs:
+        if not etf.get("is_strategy"):
+            continue
+        groups.setdefault(str(etf.get("grid_action_short") or "执行策略"), []).append(etf)
     return [
         {"action": key, "count": len(items), "class": items[0].get("grid_action_class", "neutral"), "etfs": items}
         for key, items in (
@@ -1214,20 +1300,22 @@ def _grid_qty_html(value: Any) -> str:
     number = _float_or_none(value)
     if number is None:
         return "-"
+    if number <= 0:
+        return _span("不设置", "attention")
     return f'<span class="attention">{number:.0f}股</span>'
 
 
 def _grid_side_qty_html(value: Any, side: str, status: Any = None) -> str:
     status_text = str(status or "")
     if status_text in {"DISABLED", "INVALID_PRICE"}:
-        return _span("停买" if side == "buy" else "暂不卖", "attention")
+        return _span("买入侧停用" if side == "buy" else "暂不卖", "attention")
     if status_text in {"NO_TRADABLE_LOT", "BELOW_MIN_LOT"}:
         return _span("不足一手" if side == "sell" else "不可买", "attention")
     number = _float_or_none(value)
     if number is None:
         return "-"
     if number < 100:
-        return _span("停买" if side == "buy" and number <= 0 else "不足一手", "attention")
+        return _span("买入侧停用" if side == "buy" and number <= 0 else "不足一手", "attention")
     rounded = int(number) // 100 * 100
     if rounded < 100:
         return _span("不足一手", "attention")
@@ -1373,12 +1461,39 @@ def _volume_alert(item: dict) -> str:
 def _grid_action_merged_html(item: dict) -> str:
     return _join_html(
         [
-            _span(f"网格:{_display_action(str(item.get('action') or '-'))}", _grid_action_class(str(item.get("action") or ""))),
+            _span(f"{_grid_strategy_label(item)}:{_display_action(str(item.get('action') or '-'))}", _grid_action_class(str(item.get("action") or ""))),
             _inline_label("用途", item.get("grid_purpose")),
             _inline_label("胜率护栏", "；".join(_report_guardrails(item))),
             _inline_label("基准", item.get("base_price_status")),
             _inline_label("基准判断", item.get("base_price_reason")),
             _inline_label("依据", "；".join(item.get("reasons") or [])),
+        ]
+    )
+
+
+def _grid_strategy_label(item: dict) -> str:
+    mode = str(item.get("grid_mode") or "")
+    if mode == "ONLY_SELL_OR_CLEAR":
+        return "清仓/退出策略"
+    if mode == "WEAK_REDUCE":
+        return "反弹减仓策略"
+    if mode == "PROFIT_PROTECTION":
+        return "分批止盈策略"
+    return "网格"
+
+
+def _grid_buy_disabled_plan_html(item: dict) -> str:
+    mode = str(item.get("grid_mode") or "")
+    if mode == "ONLY_SELL_OR_CLEAR":
+        plan = "删除或停用 Touker 买入条件单；本次只保留卖出/清仓候选，不用扩大买入间距伪装成停用买入侧。"
+    elif mode == "WEAK_REDUCE":
+        plan = "暂停新增买入条件；先按反弹减仓处理，趋势重新站回 MA5/MA10 后再恢复买入侧。"
+    else:
+        plan = "买入侧未启用。"
+    return _join_html(
+        [
+            _span("不展示买股数", "attention"),
+            f'<span class="inline-label">处理：</span>{escape(plan)}',
         ]
     )
 
@@ -1599,7 +1714,7 @@ def _signed_number_span(match: re.Match[str]) -> str:
 def _highlight_keywords(text: str) -> str:
     escaped = escape(_simplify_direction_text(text))
     rules = [
-        (r"(停买|暂停|风控|禁止|高风险|跌破|过热)", "danger"),
+        (r"(停用买入侧|暂停|风控|禁止|高风险|跌破|过热)", "danger"),
         (r"(降低买|降买|调宽|调窄|需调整|谨慎)", "warn"),
         (r"(买入|加仓|建仓|偏强|盈利|修复)", "profit"),
         (r"(卖出|减仓|退出|亏损|偏弱)", "loss"),
@@ -1637,6 +1752,7 @@ def _simplify_direction_text(value: Any) -> str:
         "只保留卖出": "只卖清仓",
         "提高买入侧": "提高买",
         "网格买入侧": "网格买",
+        "买入侧停用": "停用买入侧",
         "买入侧": "买",
         "卖出侧": "卖",
         "买入触发": "买触发",
@@ -1743,6 +1859,8 @@ def _grid_action_class(action: str) -> str:
         return "attention"
     if "新建" in action:
         return "action-buy"
+    if any(word in action for word in ("只卖清仓", "清仓", "退出", "减仓")):
+        return "action-sell"
     if any(word in action for word in ("调宽", "调窄", "调整", "降低")):
         return "warn"
     return "neutral"

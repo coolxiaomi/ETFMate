@@ -176,6 +176,16 @@ h3 { font-size: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: w
   font-size: 12px;
 }
 .swatch { width: 10px; height: 10px; border-radius: 2px; }
+.pnl-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 14px;
+}
+.pnl-group-title {
+  margin: 0 0 7px;
+  font-size: 13px;
+  font-weight: 900;
+}
 .pnl-bars { display: grid; gap: 6px; }
 .pnl-bar {
   display: grid;
@@ -189,6 +199,7 @@ h3 { font-size: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: w
 .pnl-fill { display: block; height: 100%; border-radius: inherit; background: #6b7d84; }
 .pnl-fill.profit { background: var(--profit); }
 .pnl-fill.loss { background: var(--loss); }
+.pnl-track.loss-side .pnl-fill { margin-left: auto; }
 .risk-summary { margin-bottom: 8px; color: var(--danger); font-weight: 900; }
 .risk-bars { display: grid; gap: 6px; }
 .risk-bar {
@@ -463,7 +474,7 @@ table {
   .summary { grid-template-columns: repeat(2, 1fr); margin-top: 10px; }
   .tabbar { overflow-x: auto; }
   .tab-button { white-space: nowrap; }
-  .dash-grid, .pie-wrap { grid-template-columns: 1fr; }
+  .dash-grid, .pie-wrap, .pnl-split { grid-template-columns: 1fr; }
   .legend-row { grid-template-columns: 10px 72px minmax(0, 1fr) 44px; }
   .pnl-bar { grid-template-columns: 1fr; gap: 3px; }
   .risk-bar { grid-template-columns: 1fr; gap: 3px; }
@@ -574,6 +585,8 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
 .pie { box-shadow: var(--shadow-card); }
 .pie-center, .heat, .etf-heading-name, .nav-action, .nav-pnl, .bar-pct, .bar-pnl { font-weight: 600; }
 .pnl-fill, .bar-fill { background: var(--faint); }
+.pnl-fill.profit { background: var(--profit); }
+.pnl-fill.loss { background: var(--loss); }
 .heat-hot, .trend-fill.heat-hot { background: var(--profit); }
 .heat-warm, .trend-fill.heat-warm { background: #ff9300; }
 .heat-flat, .trend-fill.heat-flat { background: var(--muted); }
@@ -652,6 +665,7 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
           <button class="tab-button" type="button" data-tab="holding">资金仓</button>
           <button class="tab-button" type="button" data-tab="pnl">盈亏</button>
           <button class="tab-button" type="button" data-tab="grid">网格</button>
+          <button class="tab-button" type="button" data-tab="strategy">执行策略</button>
           <button class="tab-button" type="button" data-tab="risk">风险</button>
         </div>
         <div class="tab-panel is-active" data-panel="decision">
@@ -703,13 +717,27 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
             <span class="metric-chip profit">盈 {{ nav_dashboard.pnl.profit_count }}</span>
             <span class="metric-chip loss">亏 {{ nav_dashboard.pnl.loss_count }}</span>
           </div>
-          <div class="pnl-bars">
-            {% for row in nav_dashboard.pnl.rows %}
-            <a class="pnl-bar filter-item" data-tags="{{ row.filter_tags }}" href="#{{ row.id }}"><span class="bar-name {{ row.pnl_class }}">{{ row.code }} {{ row.name }}</span><span class="pnl-track"><span class="pnl-fill {{ row.pnl_class }}" style="width: {{ row.width }}%"></span></span><span class="{{ row.pnl_class }}">{{ row.pnl_value }}</span></a>
-            {% endfor %}
+          <div class="pnl-split">
+            <section>
+              <h3 class="pnl-group-title profit">盈利榜</h3>
+              <div class="pnl-bars">
+                {% for row in nav_dashboard.pnl.profit_rows %}
+                <a class="pnl-bar filter-item" data-tags="{{ row.filter_tags }}" href="#{{ row.id }}"><span class="bar-name {{ row.pnl_class }}">{{ row.code }} {{ row.name }}</span><span class="pnl-track profit-side"><span class="pnl-fill {{ row.pnl_class }}" style="width: {{ row.width }}%"></span></span><span class="{{ row.pnl_class }}">{{ row.pnl_value }}</span></a>
+                {% endfor %}
+              </div>
+            </section>
+            <section>
+              <h3 class="pnl-group-title loss">亏损榜</h3>
+              <div class="pnl-bars">
+                {% for row in nav_dashboard.pnl.loss_rows %}
+                <a class="pnl-bar filter-item" data-tags="{{ row.filter_tags }}" href="#{{ row.id }}"><span class="bar-name {{ row.pnl_class }}">{{ row.code }} {{ row.name }}</span><span class="pnl-track loss-side"><span class="pnl-fill {{ row.pnl_class }}" style="width: {{ row.width }}%"></span></span><span class="{{ row.pnl_class }}">{{ row.pnl_value }}</span></a>
+                {% endfor %}
+              </div>
+            </section>
           </div>
         </div>
         <div class="tab-panel" data-panel="grid">
+          {% if nav_dashboard.grid_groups %}
           {% for group in nav_dashboard.grid_groups %}
           <section class="cluster filter-group">
             <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> <span class="cluster-count" data-count>{{ group.count }}</span></h3>
@@ -720,6 +748,25 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
             </div>
           </section>
           {% endfor %}
+          {% else %}
+          <div class="risk-empty">无可执行双边网格建议</div>
+          {% endif %}
+        </div>
+        <div class="tab-panel" data-panel="strategy">
+          {% if nav_dashboard.strategy_groups %}
+          {% for group in nav_dashboard.strategy_groups %}
+          <section class="cluster filter-group">
+            <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> <span class="cluster-count" data-count>{{ group.count }}</span></h3>
+            <div class="mini-list">
+              {% for etf in group.etfs %}
+              <a class="mini-chip filter-item" data-tags="{{ etf.filter_tags }}" href="#{{ etf.id }}"><span class="{{ etf.grid_action_class }}">{{ etf.grid_action_short }}</span><span class="mini-code {{ etf.pnl_class }}">{{ etf.code }}</span><span class="mini-name">{{ etf.name }}</span></a>
+              {% endfor %}
+            </div>
+          </section>
+          {% endfor %}
+          {% else %}
+          <div class="risk-empty">无清仓/减仓执行策略</div>
+          {% endif %}
         </div>
         <div class="tab-panel" data-panel="risk">
           {% if nav_dashboard.risk_items %}

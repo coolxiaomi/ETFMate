@@ -379,8 +379,11 @@ def test_high_risk_zero_target_grid_must_not_keep_normal_buy_side():
 
     assert advice["action"] == "只卖清仓"
     assert advice["grid_mode"] == "ONLY_SELL_OR_CLEAR"
+    assert advice["grid_applicable"] is False
+    assert advice["execution_plan_type"] == "CLEAR_PLAN"
     assert advice["suggested_buy_quantity"] is None
     assert advice["buy_execution_status"] == "DISABLED"
+    assert advice["suggested_sell_quantity"] >= 100
 
 
 def test_zero_target_reduce_grid_switches_to_sell_only_even_before_high_risk():
@@ -407,8 +410,11 @@ def test_zero_target_reduce_grid_switches_to_sell_only_even_before_high_risk():
 
     assert advice["action"] == "只卖清仓"
     assert advice["grid_mode"] == "ONLY_SELL_OR_CLEAR"
+    assert advice["grid_applicable"] is False
+    assert advice["execution_plan_type"] == "CLEAR_PLAN"
     assert advice["suggested_buy_quantity"] is None
     assert advice["buy_execution_status"] == "DISABLED"
+    assert advice["suggested_sell_quantity"] >= 100
 
 
 def test_grid_confirmation_pct_uses_base_price_buckets_and_stays_equal():
@@ -434,7 +440,12 @@ def test_grid_confirmation_pct_uses_base_price_buckets_and_stays_equal():
         market.last_price = base_price
         market.atr14_pct = 8.0
 
-        advice = advise_grid(grid, market, _position(position_pct=2))
+        advice = advise_grid(
+            grid,
+            market,
+            _position(position_pct=2),
+            rule_decision={"action": "持有", "position_action": "HOLD", "trend_score": 70, "risk_level": "MEDIUM"},
+        )
 
         assert advice["suggested_buy_rebound_pct"] == expected
         assert advice["suggested_sell_pullback_pct"] == expected
@@ -683,6 +694,8 @@ def test_weak_loss_grid_does_not_keep_normal_buy_side():
 
     assert advice["action"] == "弱势减仓"
     assert advice["grid_mode"] == "WEAK_REDUCE"
+    assert advice["grid_applicable"] is False
+    assert advice["execution_plan_type"] == "REDUCE_PLAN"
     assert advice["suggested_buy_quantity"] is None
     assert advice["buy_execution_status"] == "DISABLED"
     assert advice["suggested_sell_quantity"] >= 100
@@ -714,8 +727,103 @@ def test_disabled_grid_side_does_not_render_zero_share_order():
     html = _grid_table_html(advice)
 
     assert advice["suggested_buy_quantity"] is None
-    assert "停买" in html
+    assert "买入侧" in html
+    assert "不属于网格建议" in html
+    assert "<th>买</th>" not in html
     assert re.search(r"(?<!\d)0股", html) is None
+
+
+def test_applicable_held_grid_has_numeric_buy_and_sell_lots():
+    grid = GridConfig(
+        code="159516",
+        name="半导体设备ETF国泰",
+        enabled=True,
+        order_quantity=1000,
+        buy_quantity=1000,
+        sell_quantity=1000,
+        buy_fall_pct=3,
+        sell_rise_pct=3,
+    )
+    position = Position("159516", "半导体设备ETF国泰", 1000, 1.0, 1.2, 1200, 200, 20, position_pct=2)
+    market = MarketSnapshot(
+        code="159516",
+        name="半导体设备ETF国泰",
+        last_price=1.2,
+        pct_chg=1,
+        volume=1_000_000,
+        amount=100_000_000,
+        boll_upper=1.2,
+        boll_position=0.98,
+        rsi6=85,
+        atr14_pct=4,
+        kline_days=240,
+    )
+
+    advice = advise_grid(
+        grid,
+        market,
+        position,
+        rule_decision={
+            "action": "持有或小幅减仓",
+            "position_action": "HOLD_OR_REDUCE",
+            "trend_score": 72,
+            "risk_level": "HIGH",
+            "trend_overheat_level": "SEVERE_OVERHEATED",
+        },
+    )
+
+    assert advice["grid_applicable"] is True
+    assert advice["suggested_buy_quantity"] >= 100
+    assert advice["suggested_buy_quantity"] % 100 == 0
+    assert advice["suggested_sell_quantity"] >= 100
+    assert advice["suggested_sell_quantity"] % 100 == 0
+
+
+def test_profit_protection_keeps_numeric_buy_quantity_for_held_grid():
+    grid = GridConfig(
+        code="159516",
+        name="半导体设备ETF国泰",
+        enabled=True,
+        order_quantity=1000,
+        buy_quantity=1000,
+        sell_quantity=1000,
+        buy_fall_pct=3,
+        sell_rise_pct=3,
+    )
+    position = Position("159516", "半导体设备ETF国泰", 1000, 1.0, 1.2, 1200, 200, 20, position_pct=2)
+    market = MarketSnapshot(
+        code="159516",
+        name="半导体设备ETF国泰",
+        last_price=1.2,
+        pct_chg=1,
+        volume=1_000_000,
+        amount=100_000_000,
+        boll_upper=1.2,
+        boll_position=0.98,
+        rsi6=85,
+        atr14_pct=4,
+        kline_days=240,
+    )
+
+    advice = advise_grid(
+        grid,
+        market,
+        position,
+        rule_decision={
+            "action": "持有或小幅减仓",
+            "position_action": "HOLD_OR_REDUCE",
+            "trend_score": 72,
+            "risk_level": "HIGH",
+            "trend_overheat_level": "SEVERE_OVERHEATED",
+        },
+    )
+
+    html = _grid_table_html(advice)
+
+    assert advice["grid_mode"] == "PROFIT_PROTECTION"
+    assert advice["suggested_buy_quantity"] == 100
+    assert advice["buy_execution_status"] == "ACTIVE"
+    assert "100股" in html
 
 
 def test_trend_grid_sell_quantity_never_exceeds_current_position_for_report_examples():
@@ -767,7 +875,7 @@ def test_weak_trend_report_grid_label_is_not_lower_buy():
     assert _compact_grid_action("弱势减仓") == "弱减"
 
 
-def test_watchlist_open_generates_new_grid_without_existing_touker_grid():
+def test_watchlist_open_without_sell_side_does_not_emit_executable_grid():
     market = MarketSnapshot(
         code="159999",
         name="测试ETF",
@@ -783,12 +891,13 @@ def test_watchlist_open_generates_new_grid_without_existing_touker_grid():
 
     advice = advise_grid(None, market, None, rule_decision={"action": "轻仓建仓", "position_action": "LIGHT_OPEN", "trend_score": 78, "risk_level": "LOW"})
 
-    assert advice["grid_applicable"] is True
-    assert advice["grid_purpose"] == "建仓网格"
+    assert advice["grid_applicable"] is False
+    assert advice["execution_plan_type"] == "PAUSE_PLAN"
+    assert advice["grid_purpose"] == "暂停策略"
     assert advice["base_price_status"] == "新建建议基准"
     assert advice["suggested_base_price"] is not None
-    assert advice["suggested_buy_rebound_pct"] is not None
-    assert advice["suggested_sell_pullback_pct"] is not None
+    assert advice["suggested_buy_quantity"] is None
+    assert any("不满足双边网格定义" in reason for reason in advice["reasons"])
 
 
 def test_watchlist_not_open_does_not_emit_executable_grid():
@@ -923,8 +1032,41 @@ def test_report_etf_display_order_uses_trend_holding_and_pnl_desc():
     _assert_link_order(_panel_html(html, "decision", "trend"), expected_codes)
     _assert_link_order(_panel_html(html, "trend", "holding"), expected_codes)
     _assert_link_order(_panel_html(html, "holding", "pnl"), expected_codes)
-    _assert_link_order(_panel_html(html, "pnl", "grid"), expected_codes)
+    _assert_link_order(_panel_html(html, "pnl", "grid"), ["159901", "159904", "159902", "159903"])
     _assert_link_order(_panel_html(html, "grid", "risk"), expected_codes)
+
+
+def test_report_separates_execution_strategy_from_grid_tab():
+    recommendations = [
+        _report_item("159901", "双边网格", 80, 30, 8),
+        _report_item("159902", "清仓策略", 40, 20, -5),
+    ]
+    grids = [
+        {"code": "159901", "name": "双边网格", "action": "高位保护", "grid_applicable": True},
+        {
+            "code": "159902",
+            "name": "清仓策略",
+            "action": "只卖清仓",
+            "grid_applicable": False,
+            "execution_plan_type": "CLEAR_PLAN",
+            "execution_plan_label": "清仓/退出策略",
+            "execution_plan_summary": "本次不再给网格建议。",
+            "suggested_sell_quantity": 100,
+            "suggested_sell_rise_pct": 3,
+            "suggested_sell_pullback_pct": 0.15,
+            "sell_execution_status": "ACTIVE",
+            "reasons": ["趋势失效"],
+        },
+    ]
+
+    html = render_html("2026-06-26 10:00:00", recommendations, grids, {}, {})
+
+    grid_panel = _panel_html(html, "grid", "strategy")
+    strategy_panel = _panel_html(html, "strategy", "risk")
+    assert 'href="#etf-159901"' in grid_panel
+    assert 'href="#etf-159902"' not in grid_panel
+    assert 'href="#etf-159902"' in strategy_panel
+    assert "不属于网格建议" in html
 
 
 def test_report_risk_tab_aggregates_high_risk_items_from_etf_details():

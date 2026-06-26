@@ -140,7 +140,7 @@ def advise_grid(
             suggested_sell_qty = base_lot_qty
             suggested_buy_fall = grid.buy_fall_pct if grid else suggested_buy_fall
             suggested_sell_rise = grid.sell_rise_pct if grid else suggested_sell_rise
-            reasons.append("目标仓位为 0 且仍有持仓，网格买入不再按正常数量建议；需人工停用买触发或只保留卖出纪律")
+            reasons.append("目标仓位为 0 且仍有持仓，买入侧不再按正常数量建议；需人工停用买触发，并改按清仓/减仓策略处理")
         elif position_action in {"EXIT_TREND_POSITION", "TREND_REVIEW", "EXIT_SHORT_TERM", "RISK_REVIEW"} or rule_action in {"退出短线仓位", "趋势复核", "风控复核"} or trend_score < 45:
             action = "降低买入侧"
             suggested_buy_qty = _round_qty(base_lot_qty * 0.5)
@@ -221,6 +221,45 @@ def advise_grid(
     suggested_max_position = _suggest_max_position_quantity(grid, position, suggested_buy_qty, base_lot_qty)
     if not reasons:
         reasons.append("缺少完整波动率或网格参数，建议先补齐数据")
+    if grid_mode in {"WEAK_REDUCE", "ONLY_SELL_OR_CLEAR", "PAUSE"}:
+        return _execution_plan_advice(
+            grid=grid,
+            market=market,
+            position=position,
+            action=action,
+            grid_mode=grid_mode,
+            grid_purpose=grid_purpose,
+            base_eval=base_eval,
+            suggested_sell_rise=suggested_sell_rise,
+            suggested_sell_pullback=suggested_sell_pullback,
+            suggested_sell_qty=suggested_sell_qty,
+            execution_checks=execution_checks,
+            sell_execution_status=sell_execution_status,
+            guardrails=guardrails,
+            reasons=reasons,
+            layer_payload=layer_payload,
+            rule_decision=rule_decision,
+        )
+    if not _has_bidirectional_lots(suggested_buy_qty, suggested_sell_qty, buy_execution_status, sell_execution_status):
+        reasons.append("买入侧和卖出侧未同时具备 100 股整数倍数量，不满足双边网格定义；本次不输出网格建议")
+        return _execution_plan_advice(
+            grid=grid,
+            market=market,
+            position=position,
+            action="暂停",
+            grid_mode="PAUSE",
+            grid_purpose="暂停策略",
+            base_eval=base_eval,
+            suggested_sell_rise=suggested_sell_rise,
+            suggested_sell_pullback=suggested_sell_pullback,
+            suggested_sell_qty=suggested_sell_qty,
+            execution_checks=execution_checks,
+            sell_execution_status=sell_execution_status,
+            guardrails=guardrails,
+            reasons=reasons,
+            layer_payload=layer_payload,
+            rule_decision=rule_decision,
+        )
 
     return {
         "code": grid.code if grid else market.code,
@@ -265,6 +304,83 @@ def advise_grid(
     }
 
 
+def _execution_plan_advice(
+    grid: GridConfig | None,
+    market: MarketSnapshot,
+    position: Position | None,
+    action: str,
+    grid_mode: str,
+    grid_purpose: str,
+    base_eval: dict[str, Any],
+    suggested_sell_rise: float | None,
+    suggested_sell_pullback: float | None,
+    suggested_sell_qty: float | None,
+    execution_checks: list[dict[str, Any]],
+    sell_execution_status: str,
+    guardrails: list[str],
+    reasons: list[str],
+    layer_payload: dict[str, Any],
+    rule_decision: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if grid_mode == "ONLY_SELL_OR_CLEAR":
+        plan_type = "CLEAR_PLAN"
+        plan_label = "清仓/退出策略"
+        plan_summary = "趋势失效或目标仓位归零，本次不再给网格建议；建议删除或暂停原双边网格，另按卖出计划处理。"
+    elif grid_mode == "WEAK_REDUCE":
+        plan_type = "REDUCE_PLAN"
+        plan_label = "反弹减仓策略"
+        plan_summary = "趋势不强，本次不再给网格建议；建议暂停原双边网格，按反弹减仓计划降低暴露。"
+    else:
+        plan_type = "PAUSE_PLAN"
+        plan_label = "暂停策略"
+        plan_summary = "交易条件不足或数据不可用，本次不生成网格建议。"
+    reasons = _execution_plan_reasons(plan_summary, reasons)
+    return {
+        "code": grid.code if grid else market.code,
+        "name": grid.name if grid else market.name,
+        "action": action,
+        "grid_mode": grid_mode,
+        "grid_mode_label": _grid_mode_label(grid_mode),
+        "execution_plan_type": plan_type,
+        "execution_plan_label": plan_label,
+        "execution_plan_summary": plan_summary,
+        "execution_checks": execution_checks,
+        "buy_execution_status": "DISABLED",
+        "sell_execution_status": sell_execution_status,
+        "cash_constraint_status": "NO_BUY",
+        "grid_applicable": False,
+        "grid_purpose": plan_label,
+        "strategy_profile": STRATEGY_PROFILE,
+        "strategy_guardrails": guardrails,
+        "has_existing_grid": grid is not None,
+        "base_price_status": base_eval["status"],
+        "base_price_reason": base_eval["reason"],
+        "current_base_price": grid.base_price if grid else None,
+        "suggested_base_price": base_eval["suggested_base"],
+        "current_buy_fall_pct": grid.buy_fall_pct if grid else None,
+        "suggested_buy_fall_pct": None,
+        "current_buy_rebound_pct": grid.buy_rebound_pct if grid else None,
+        "suggested_buy_rebound_pct": None,
+        "current_sell_rise_pct": grid.sell_rise_pct if grid else None,
+        "suggested_sell_rise_pct": suggested_sell_rise,
+        "current_sell_pullback_pct": grid.sell_pullback_pct if grid else None,
+        "suggested_sell_pullback_pct": suggested_sell_pullback,
+        "current_quantity": _current_quantity(grid) or None,
+        "current_buy_quantity": grid.buy_quantity if grid else None,
+        "current_sell_quantity": grid.sell_quantity if grid else None,
+        "suggested_buy_quantity": None,
+        "suggested_sell_quantity": suggested_sell_qty if suggested_sell_qty is not None else None,
+        "current_min_base_quantity": grid.min_base_quantity if grid else None,
+        "suggested_min_base_quantity": None,
+        "current_max_position_quantity": grid.max_position_quantity if grid else None,
+        "suggested_max_position_quantity": None,
+        "reasons": reasons,
+        "layered_confidence": layer_payload.get("confidence") if layer_payload else None,
+        "layered_score": layer_payload.get("total_score") if layer_payload else None,
+        "rule_decision": rule_decision,
+    }
+
+
 def _inactive_grid_advice(
     market: MarketSnapshot,
     grid: GridConfig | None,
@@ -293,6 +409,42 @@ def _inactive_grid_advice(
         "layered_score": layer_payload.get("total_score") if layer_payload else None,
         "rule_decision": rule_decision,
     }
+
+
+def _execution_plan_reasons(plan_summary: str, reasons: list[str]) -> list[str]:
+    result = [plan_summary]
+    for reason in reasons:
+        text = str(reason)
+        if not text or text == plan_summary:
+            continue
+        if "当前网格间距" in text or "买数量不按单只仓位上限" in text:
+            continue
+        if "可保留买入侧" in text or "买入侧先降速" in text or "买入侧降速" in text:
+            text = "趋势或价格结构转弱，本次不新增买入，先按卖出执行策略降低暴露"
+        text = text.replace("网格买入", "买入")
+        text = text.replace("网格切换为弱势减仓", "执行策略切换为反弹减仓")
+        text = text.replace("网格切换为只卖清仓", "执行策略切换为清仓/退出")
+        text = text.replace("趋势偏弱或暂停模式下", "执行策略模式下")
+        result.append(text)
+    return list(dict.fromkeys(result))
+
+
+def _has_bidirectional_lots(
+    buy_qty: float | None,
+    sell_qty: float | None,
+    buy_status: str,
+    sell_status: str,
+) -> bool:
+    return (
+        buy_status == "ACTIVE"
+        and sell_status == "ACTIVE"
+        and buy_qty is not None
+        and sell_qty is not None
+        and buy_qty >= 100
+        and sell_qty >= 100
+        and buy_qty % 100 == 0
+        and sell_qty % 100 == 0
+    )
 
 
 def _grid_applicable(has_existing_grid: bool, position: Position | None, rule_action: str, position_action: str) -> bool:
@@ -376,7 +528,9 @@ def _apply_trend_grid_mode(
         )
     if mode == "PROFIT_PROTECTION":
         severe = overheat_level == "SEVERE_OVERHEATED"
-        next_buy = 0 if severe else min(_round_lot_down(buy_qty or base_qty), 100)
+        next_buy = 100 if current_qty else None
+        if not severe:
+            next_buy = min(_round_lot_down(buy_qty or base_qty), 100)
         sell_floor = current_qty / 2 if severe and current_qty else sell_qty or base_qty
         next_sell = _round_lot_down(max(sell_qty or base_qty, sell_floor))
         return (
@@ -401,7 +555,7 @@ def _apply_trend_grid_mode(
             sell_rise,
             0,
             next_sell,
-            "趋势不强，网格切换为弱势减仓：买入侧停用，反弹分批卖出",
+            "趋势不强，执行策略切换为反弹减仓：买入侧停用，反弹分批卖出",
         )
     if mode == "ONLY_SELL_OR_CLEAR":
         return (
@@ -409,7 +563,7 @@ def _apply_trend_grid_mode(
             sell_rise,
             0,
             current_qty,
-            "趋势失效，网格切换为只卖清仓：买入侧停用，卖出不超过当前持仓",
+            "趋势失效，执行策略切换为清仓/退出：买入侧停用，卖出不超过当前持仓",
         )
     return buy_fall, sell_rise, 0, 0, "规则禁止交易或数据不可用，本次暂停网格"
 
@@ -428,11 +582,15 @@ def _apply_execution_checks(
     if mode in {"WEAK_REDUCE", "ONLY_SELL_OR_CLEAR", "PAUSE"}:
         normalized_buy = None
         buy_status = "DISABLED"
-        checks.append({"check": "buy_side_disabled", "status": "fixed", "message": "趋势偏弱或暂停模式下，买入侧已标记为停用，不输出 0 股条件单"})
+        checks.append({"check": "buy_side_disabled", "status": "fixed", "message": "趋势偏弱或暂停模式下，买入侧已标记为停用，不输出零股条件单"})
     elif market.last_price <= 0:
         normalized_buy = None
         buy_status = "INVALID_PRICE"
         checks.append({"check": "valid_price", "status": "fixed", "message": "最新价无效，买入侧已标记为不可执行"})
+    elif buy_qty is not None and buy_qty <= 0:
+        normalized_buy = None
+        buy_status = "DISABLED"
+        checks.append({"check": "buy_side_disabled", "status": "fixed", "message": "买入侧数量小于一手，已标记为停用，不输出零股条件单"})
     elif buy_qty is None:
         normalized_buy = None
         buy_status = "DISABLED"
@@ -442,7 +600,7 @@ def _apply_execution_checks(
     if not position or current_qty < 100:
         normalized_sell = None
         sell_status = "NO_TRADABLE_LOT"
-        checks.append({"check": "sell_side_has_lot", "status": "fixed", "message": "当前持仓不足一手，卖出侧不输出 0 股条件单"})
+        checks.append({"check": "sell_side_has_lot", "status": "fixed", "message": "当前持仓不足一手，卖出侧不输出零股条件单"})
     elif sell_qty is None or sell_qty <= 0:
         normalized_sell = None
         sell_status = "DISABLED"
@@ -459,7 +617,7 @@ def _apply_execution_checks(
             checks.append({"check": "sell_qty_lte_position", "status": "ok", "message": ""})
 
     if _was_lot_fixed(buy_qty, normalized_buy) or _was_lot_fixed(sell_qty, normalized_sell):
-        checks.append({"check": "round_lot", "status": "fixed", "message": "买卖数量已按 100 股整数倍修正，且不输出 0 股条件单"})
+        checks.append({"check": "round_lot", "status": "fixed", "message": "买卖数量已按 100 股整数倍修正，且不输出零股条件单"})
     checks.append({"check": "buy_cash", "status": "unknown", "message": "当前未采集可用现金，买入数量不按单只仓位上限放大"})
     return normalized_buy, normalized_sell, checks, buy_status, sell_status
 
