@@ -27,10 +27,9 @@ def login(root: Path) -> None:
 def collect(root: Path, out_dir: Path) -> dict:
     with WebAccessSession(root) as session:
         require_login(session, TOUKER_URL, touker_login_check, "Touker 未登录或登录验证未完成，请在 Chrome 中手动登录后重新运行。")
-        for _ in range(12):
-            session.eval(_SCROLL_JS)
-            time.sleep(0.25)
+        scroll_meta = _scroll_until_stable(session)
         snapshot = _as_dict(session.eval(_SNAPSHOT_JS))
+        snapshot.update(scroll_meta)
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "grids_snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         (out_dir / "grids_text.txt").write_text(str(snapshot.get("text", "")), encoding="utf-8")
@@ -43,6 +42,32 @@ def collect(root: Path, out_dir: Path) -> dict:
     if expected and len(grids) < expected:
         raise RuntimeError(f"Touker 网格未采齐：页面显示监控中 {expected} 条，当前只识别到 {len(grids)} 条。请确认页面已完整加载后重新运行。")
     return {"grids": grids, "snapshot": snapshot, "expected_count": expected}
+
+
+def _scroll_until_stable(session: WebAccessSession, max_steps: int = 36) -> dict[str, Any]:
+    seen_signatures: set[str] = set()
+    stable_steps = 0
+    for step in range(max_steps):
+        latest = _as_dict(session.eval(_SNAPSHOT_JS))
+        signature = _snapshot_signature(latest)
+        if signature in seen_signatures:
+            stable_steps += 1
+        else:
+            stable_steps = 0
+            seen_signatures.add(signature)
+        scroll_result = _as_dict(session.eval(_SCROLL_JS))
+        if not scroll_result.get("moved") and stable_steps >= 2:
+            return {
+                "scroll_steps": step + 1,
+                "scroll_complete": True,
+                "scroll_stop_reason": "页面无新增内容且滚动容器已稳定",
+            }
+        time.sleep(0.25)
+    return {
+        "scroll_steps": max_steps,
+        "scroll_complete": False,
+        "scroll_stop_reason": "达到最大滚动次数，未确认列表到底",
+    }
 
 
 def _records_from_snapshot(snapshot: dict[str, Any]) -> list[dict]:
@@ -192,6 +217,12 @@ def _dedupe(items: list[dict], *keys: str) -> list[dict]:
         seen.add(identity)
         result.append(item)
     return result
+
+
+def _snapshot_signature(snapshot: dict[str, Any]) -> str:
+    text = str(snapshot.get("text") or "")
+    code_count = len(re.findall(r"(?<!\d)(?:sh|sz)?\d{6}(?!\d)", text, flags=re.I))
+    return f"{code_count}:{len(snapshot.get('blocks') or [])}:{len(text)}"
 
 
 _SCROLL_JS = r"""

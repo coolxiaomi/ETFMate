@@ -12,6 +12,7 @@
 - `docs/rule.md`：ETF 池过滤、交易硬过滤、规则引擎数据流和 AI 复核边界。
 - `docs/grid.md`：Touker 网格建议、基准价、买入反弹/卖出回落、风险联动和回归测试。
 - `docs/report.md`：HTML 报告展示排序、风险页聚合和展示契约。
+- `docs/data-quality.md`：采集完整性、字段完整性、universe 对账和报告前硬阻断。
 
 如果修改 Python 规则、网格、AI 输入或报告模板，必须同步更新对应 `docs/*.md` 和聚焦回归测试。
 
@@ -41,8 +42,15 @@ Touker：
 - 关键表格、卡片或滚动列表未加载完成。
 - 同花顺持仓/交易/自选 ETF 池或 Touker 网格任一核心源未采齐。
 - 只能拿到样例数据、首屏数据、搜索结果、WebFetch/curl 结果或手工指定代码。
+- `data/raw/market/RUN_ID/data_quality.json` 的 `status=FAIL`。
 
 停止时不得生成最终建议，不得发布 ShareOne。
+
+质量闸门必须在三处执行：
+
+- `collect` 后：校验同花顺和 Touker 原始采集结果。
+- `analyze` 前和分析结果落盘前：防止复用坏快照或生成 AI 复核输入。
+- `report` 前：防止旧的或手工拼接的 `analysis.json` 绕过采集完整性。
 
 ## web-access 要求
 
@@ -71,6 +79,7 @@ data/raw/ths/RUN_ID/account.json
 data/raw/touker/RUN_ID/grids.json
 data/raw/market/RUN_ID/snapshots.json
 data/raw/market/RUN_ID/analysis.json
+data/raw/market/RUN_ID/data_quality.json
 data/raw/market/RUN_ID/ai_review_input.json
 data/raw/market/RUN_ID/ai_judgements.json
 data/reports/RUN_ID-etf-realtime.html

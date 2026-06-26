@@ -166,6 +166,8 @@ def _collect_scroll_loaded_snapshot(session: WebAccessSession, label: str, max_s
     seen_signatures: set[str] = set()
     stable_steps = 0
     latest: dict[str, Any] = {}
+    scroll_complete = False
+    stop_reason = "达到最大滚动次数，未确认列表到底"
     for step in range(max_steps):
         latest = _as_dict(session.eval(_SNAPSHOT_JS))
         latest["scroll_step"] = step
@@ -178,6 +180,8 @@ def _collect_scroll_loaded_snapshot(session: WebAccessSession, label: str, max_s
             snapshots.append(latest)
         scroll_result = _as_dict(session.eval(_SCROLL_JS))
         if not scroll_result.get("moved") and stable_steps >= 2:
+            scroll_complete = True
+            stop_reason = "页面无新增内容且滚动容器已稳定"
             break
         time.sleep(0.35)
     if not snapshots:
@@ -185,6 +189,8 @@ def _collect_scroll_loaded_snapshot(session: WebAccessSession, label: str, max_s
     merged = _merge_snapshots(snapshots)
     merged["scroll_label"] = label
     merged["scroll_steps"] = len(snapshots)
+    merged["scroll_complete"] = scroll_complete
+    merged["scroll_stop_reason"] = stop_reason
     return merged
 
 

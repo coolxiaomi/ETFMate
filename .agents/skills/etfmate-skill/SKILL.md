@@ -15,7 +15,7 @@ description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用户�
 ## 文档权威顺序
 
 - 本文件只定义 skill 的入口路由、强制运行流程、硬阻断规则和参考文档索引。
-- 产品规则、评分、动作、网格和报告契约以仓库 `docs/` 为准：`docs/score.md`、`docs/action.md`、`docs/rule.md`、`docs/grid.md`、`docs/report.md`。
+- 产品规则、评分、动作、网格、报告和数据质量闸门以仓库 `docs/` 为准：`docs/score.md`、`docs/action.md`、`docs/rule.md`、`docs/grid.md`、`docs/report.md`、`docs/data-quality.md`。
 - Skill 运行期检查清单以 `references/etfmate-domain-rules.md` 为准；它不复制完整业务规则，只列出正式运行必须检查的采集、阻断、文件产物和验收项。
 - 如果规则或报告行为变化，必须同步更新对应 `docs/*.md`；只有入口行为、默认发布策略、采集硬阻断或 skill 资源路径变化时，才更新本文件。
 
@@ -28,8 +28,9 @@ description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用户�
 3. 实时采集同花顺投资账本和 Touker 网格，此时仍不要分析。
 4. 任一页面出现登录、验证码、风控、协议确认、关键数据未加载或滚动列表未采齐，立即停止并提示用户在 Chrome 中手动处理。
 5. 只有同花顺持仓/交易/自选 ETF 池和 Touker 网格都采集成功，才继续行情指标、七层证据和规则建议生成。
-6. `analyze` 生成 `data/raw/market/RUN_ID/ai_review_input.json` 后，宿主 AI 必须读取该文件，用当前会话模型生成 `ai_judgements.json`，再生成 HTML 报告。
-7. 报告完整生成后，若本次来自快捷触发或用户没有明确禁止发布，必须加载 `$shareone` skill 发布生成的 HTML 报告。
+6. `collect` 后必须通过 `data_quality.json` 质量闸门；`analyze` 和 `report` 前也必须重新执行质量闸门，失败时停止，不生成最终建议、HTML 报告或 ShareOne 发布产物。
+7. `analyze` 生成 `data/raw/market/RUN_ID/ai_review_input.json` 后，宿主 AI 必须读取该文件，用当前会话模型生成 `ai_judgements.json`，再生成 HTML 报告。
+8. 报告完整生成后，若本次来自快捷触发或用户没有明确禁止发布，必须加载 `$shareone` skill 发布生成的 HTML 报告。
 
 目标页面：
 
@@ -44,6 +45,7 @@ description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用户�
 - 同花顺投资账本必须覆盖当前持仓、清仓、交易记录、持仓备注/看法列和自选 ETF 池；所有滚动加载列表必须滚动到底并累积每屏证据。
 - Touker 必须覆盖监控中网格并按页面 `监控中(N)` 校验采集数量；采不齐时停止。
 - 任一核心源未登录、未加载、未采齐或证据完整性不足时，必须停止；不得生成最终建议，也不得发布 ShareOne。
+- `data/raw/market/RUN_ID/data_quality.json` 的 `status` 必须为 `PASS` 才能进入 AI 复核、报告和发布；`FAIL` 时只能返回阻断原因和排查路径。
 - 工具只做分析与辅助决策，不自动下单，不绕过验证码、短信、人脸、设备验证或平台风控。
 
 ## 规则与报告索引
@@ -57,6 +59,7 @@ description: 本地 ETF 实时持仓与网格交易辅助分析 skill。用户�
 - `docs/rule.md`：ETF 池过滤、交易硬过滤、规则引擎数据流和 AI 复核边界。
 - `docs/grid.md`：Touker 网格模式、执行数量校验、基准价、买入反弹/卖出回落、风险联动和回归测试。
 - `docs/report.md`：HTML 报告展示排序、风险页聚合和展示契约。
+- `docs/data-quality.md`：采集字段、滚动完整性、universe 对账和 analyze/report 前硬阻断。
 
 ## CLI 与产物
 

@@ -13,6 +13,11 @@ from etfmate.analysis.ai_advisor import (
     load_host_ai_judgements,
     normalize_host_ai_judgements,
 )
+from etfmate.analysis.data_quality import (
+    build_analysis_data_quality_report,
+    build_raw_data_quality_report,
+    require_data_quality_pass,
+)
 from etfmate.analysis.grid_advisor import advise_grid
 from etfmate.analysis.layered_context import build_layered_context, context_to_dict
 from etfmate.analysis.recommendation import recommend
@@ -95,13 +100,19 @@ def run_collect(root: Path, run_id: str) -> None:
     _require_items(touker, "grids", "Touker 没有采集到网格数据，已停止。请确认监控中网格已加载完整。")
     write_json(root / "data/raw/ths" / run_id / "account.json", ths)
     write_json(root / "data/raw/touker" / run_id / "grids.json", touker)
+    quality = build_raw_data_quality_report(ths, touker)
+    write_json(root / "data/raw/market" / run_id / "data_quality.json", quality)
+    require_data_quality_pass(quality, "采集")
     print(f"已采集实时数据: {run_id}")
 
 
 def run_analyze(root: Path, run_id: str) -> None:
     account = read_json(root / "data/raw/ths" / run_id / "account.json", default={})
     grid_payload = read_json(root / "data/raw/touker" / run_id / "grids.json", default={})
-    account_summary = account.get("account_summary") if isinstance(account, dict) else {}
+    raw_quality = build_raw_data_quality_report(account, grid_payload)
+    write_json(root / "data/raw/market" / run_id / "data_quality.json", raw_quality)
+    require_data_quality_pass(raw_quality, "分析前采集")
+    account_summary = (account.get("account_summary") or account.get("summary") or {}) if isinstance(account, dict) else {}
     positions = [_position(item, account_summary) for item in _items(account, "positions")]
     current_positions = [item for item in positions if (item.quantity or 0) > 0]
     trades = [_trade(item) for item in _items(account, "trades")]
@@ -149,7 +160,6 @@ def run_analyze(root: Path, run_id: str) -> None:
         for item in snapshots
     ]
     ai_review_input = build_ai_review_input(recommendations, grid_advices)
-    write_json(root / "data/raw/market" / run_id / AI_REVIEW_INPUT_FILE, ai_review_input)
     ai_judgements = load_host_ai_judgements(root, run_id, recommendations)
     recommendations = attach_ai_judgements(recommendations, ai_judgements)
     run_date = _run_date(run_id)
@@ -171,6 +181,10 @@ def run_analyze(root: Path, run_id: str) -> None:
         "trade_review": review_trades(trades),
         "trade_reviews": review_trade_periods(trades, run_date),
     }
+    quality = build_analysis_data_quality_report(account, grid_payload, payload)
+    write_json(root / "data/raw/market" / run_id / "data_quality.json", quality)
+    require_data_quality_pass(quality, "分析结果")
+    write_json(root / "data/raw/market" / run_id / AI_REVIEW_INPUT_FILE, ai_review_input)
     write_json(root / "data/raw/market" / run_id / "snapshots.json", snapshots)
     write_json(root / "data/raw/market" / run_id / "analysis.json", payload)
     print(f"已生成实时分析结果: data/raw/market/{run_id}/analysis.json")
@@ -183,6 +197,9 @@ def run_report(root: Path, run_id: str) -> None:
         raise RuntimeError(f"未找到分析结果: data/raw/market/{run_id}/analysis.json")
     account = read_json(root / "data/raw/ths" / run_id / "account.json", default={})
     grid_payload = read_json(root / "data/raw/touker" / run_id / "grids.json", default={})
+    quality = build_analysis_data_quality_report(account, grid_payload, analysis)
+    write_json(root / "data/raw/market" / run_id / "data_quality.json", quality)
+    require_data_quality_pass(quality, "报告前")
     recommendations = analysis.get("recommendations", [])
     grid_advices = analysis.get("grid_advices", [])
     ai_judgements = load_host_ai_judgements(root, run_id, recommendations)
@@ -191,7 +208,7 @@ def run_report(root: Path, run_id: str) -> None:
     if analysis.get("trade_reviews"):
         review = {**review, "periods": analysis["trade_reviews"]}
 
-    account_summary = account.get("account_summary") if isinstance(account, dict) else {}
+    account_summary = (account.get("account_summary") or account.get("summary") or {}) if isinstance(account, dict) else {}
     positions_count = sum(1 for item in (_position(raw, account_summary) for raw in _items(account, "positions")) if (item.quantity or 0) > 0)
     trades_count = len(_items(account, "trades"))
     closed_count = len(_items(account, "closed_positions"))
@@ -303,7 +320,7 @@ def _items(payload: Any, key: str) -> list:
 def _position(raw: dict, account_summary: dict | None = None) -> Position:
     code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "zqdm", "证券代码", "代码")))
     quantity = _num(_pick(raw, "quantity", "amount", "holdAmount", "current_amount", "持仓数量", "持有数量", "股份余额", default=0))
-    market_value = _num(_pick(raw, "market_value", "marketValue", "参考市值", "市值", "持仓市值", default=0))
+    market_value = _num(_pick(raw, "market_value", "marketValue", "holding_amount", "参考市值", "市值", "持仓市值", default=0))
     summary = account_summary if isinstance(account_summary, dict) else {}
     total_asset = _maybe_num(_pick(summary, "total_asset", "totalAsset", "总资产", default=None))
     total_market_value = _maybe_num(_pick(summary, "total_market_value", "totalMarketValue", "持仓市值", default=None))
@@ -348,7 +365,7 @@ def _position(raw: dict, account_summary: dict | None = None) -> Position:
         last_price=_num(_pick(raw, "last_price", "lastPrice", "currentPrice", "现价", "最新价", default=0)),
         market_value=market_value,
         pnl=_num(_pick(raw, "pnl", "profit", "floatProfit", "盈亏", "浮动盈亏", "持仓盈亏", default=0)),
-        pnl_pct=_num(_pick(raw, "pnl_pct", "profitRate", "incomeRate", "盈亏率", "收益率", "持仓收益率", default=0)),
+        pnl_pct=_num(_pick(raw, "pnl_pct", "total_pnl_pct", "profitRate", "incomeRate", "盈亏率", "收益率", "持仓收益率", default=0)),
         position_pct=position_pct,
         holding_pct=holding_pct,
         position_pct_source=position_pct_source,
