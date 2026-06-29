@@ -27,7 +27,7 @@ def render_html(
         date=date,
         recommendations_count=len(recommendations),
         grid_advices_count=len(grid_advices),
-        portfolio_stats=_portfolio_stats(recommendations, grid_advices, data_completeness),
+        portfolio_stats=_portfolio_stats(recommendations, grid_advices, data_completeness, t_grid_advices or []),
         nav_dashboard=_nav_dashboard(etfs),
         rule_versions=_rule_versions(date),
         etfs=etfs,
@@ -128,6 +128,7 @@ def _etf_view(item: dict) -> dict[str, Any]:
     pnl_pct = _float_or_none(rec.get("pnl_pct")) if rec else None
     risk_level = _risk_level_code(rec)
     risk_reasons = _risk_nav_reasons(rec) if rec else []
+    has_t_grid = bool(t_grid)
     return {
         "id": f"etf-{_anchor(code)}",
         "code": code,
@@ -136,7 +137,7 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "is_grid": is_grid,
         "is_strategy": is_strategy,
         "is_pool": is_pool,
-        "filter_tags": _filter_tags(is_held, is_grid, is_pool, is_strategy),
+        "filter_tags": _filter_tags(is_held, is_grid, is_pool, is_strategy, has_t_grid),
         "pnl_class": pnl_class,
         "pnl_text": _pnl_text(rec),
         "holding_pct_value": holding_pct,
@@ -159,7 +160,7 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "grid_action_short": grid_short if is_grid else _compact_strategy_action(grid),
         "grid_action_class": _grid_action_class(grid_action),
         "t_grid": _t_grid_view(t_grid),
-        "has_t_grid": bool(t_grid),
+        "has_t_grid": has_t_grid,
         "t_grid_action_short": _compact_t_grid_action(t_grid),
         "t_grid_action_class": _t_grid_action_class(t_grid),
         "t_grid_score": _float_or_none(t_grid.get("t_grid_score")) if t_grid else None,
@@ -411,7 +412,12 @@ def _data_completeness_view(data_completeness: dict | None) -> dict[str, Any]:
     return {"empty": False, "rows": rows}
 
 
-def _portfolio_stats(recommendations: list[dict], grid_advices: list[dict], data_completeness: dict | None = None) -> dict[str, int]:
+def _portfolio_stats(
+    recommendations: list[dict],
+    grid_advices: list[dict],
+    data_completeness: dict | None = None,
+    t_grid_advices: list[dict] | None = None,
+) -> dict[str, int]:
     stats = data_completeness.get("stats", {}) if isinstance(data_completeness, dict) else {}
     pool_count = _int_or_none(stats.get("watchlist_count"))
     if pool_count is None:
@@ -429,11 +435,12 @@ def _portfolio_stats(recommendations: list[dict], grid_advices: list[dict], data
         "held_count": held_count,
         "grid_count": grid_count,
         "pool_count": pool_count,
+        "t_grid_count": len(t_grid_advices or []),
         "all_count": all_count,
     }
 
 
-def _filter_tags(is_held: bool, is_grid: bool, is_pool: bool, is_strategy: bool = False) -> str:
+def _filter_tags(is_held: bool, is_grid: bool, is_pool: bool, is_strategy: bool = False, has_t_grid: bool = False) -> str:
     tags = ["all"]
     if is_held:
         tags.append("held")
@@ -443,6 +450,8 @@ def _filter_tags(is_held: bool, is_grid: bool, is_pool: bool, is_strategy: bool 
         tags.append("strategy")
     if is_pool:
         tags.append("pool")
+    if has_t_grid:
+        tags.append("tgrid")
     return " ".join(tags)
 
 

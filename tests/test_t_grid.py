@@ -107,11 +107,16 @@ def test_report_shows_t_grid_tab_for_all_watchlist_items_without_polluting_grid_
         },
     ]
 
-    html = render_html("2026-06-29 10:00:00", recommendations, [], {}, {}, t_grids)
+    html = render_html("2026-06-29 10:00:00", recommendations, [], {}, {"stats": {"watchlist_count": 2}}, t_grids)
     grid_panel = html.split('data-panel="grid"', 1)[1].split('data-panel="strategy"', 1)[0]
     t_grid_panel = html.split('data-panel="tgrid"', 1)[1]
 
     assert "T网格" in html
+    assert 'data-filter="pool"><span>2</span><label>ETF池</label></button>' in html
+    assert 'data-filter="tgrid"><span>2</span><label>T网格</label></button>' in html
+    assert re.search(r'data-filter="pool".*data-filter="tgrid".*data-filter="all"', html, re.S)
+    assert re.search(r'<article class="etf-card filter-item" data-tags="[^"]*\btgrid\b[^"]*" id="etf-159901"', html)
+    assert re.search(r'<article class="etf-card filter-item" data-tags="[^"]*\btgrid\b[^"]*" id="etf-159902"', html)
     assert "自选池 2 只" in t_grid_panel
     assert 'href="#etf-159901"' in t_grid_panel
     assert 'href="#etf-159902"' in t_grid_panel
@@ -120,6 +125,18 @@ def test_report_shows_t_grid_tab_for_all_watchlist_items_without_polluting_grid_
     assert re.search(r"(?<!\d)0股", html) is None
     assert "可用数量为0" not in html
     assert "今日不可卖" not in html
+
+
+def test_grid_tab_uses_decision_panel_group_layout():
+    recommendations = [_report_item("159903", "网格ETF")]
+    grids = [{"code": "159903", "name": "网格ETF", "action": "高位保护", "grid_applicable": True}]
+
+    html = render_html("2026-06-29 10:00:00", recommendations, grids, {}, {}, [])
+    grid_panel = html.split('data-panel="grid"', 1)[1].split('data-panel="strategy"', 1)[0]
+
+    assert '<div class="decision-panel">' in grid_panel
+    assert 'style="--group-count: 1"' in grid_panel
+    assert 'href="#etf-159903"' in grid_panel
 
 
 def _sideways_df(days: int = 123, amount: float = 120_000_000) -> pd.DataFrame:

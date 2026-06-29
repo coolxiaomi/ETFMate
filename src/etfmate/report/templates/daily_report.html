@@ -47,7 +47,7 @@ h1 { font-size: 26px; line-height: 1.2; }
 h2 { font-size: 18px; margin-bottom: 10px; }
 h3 { font-size: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .title-meta { font-size: 11px; font-weight: 500; }
-.summary { display: grid; grid-template-columns: repeat(4, 86px); gap: 8px; }
+.summary { display: grid; grid-template-columns: repeat(5, 86px); gap: 8px; }
 .summary-card {
   appearance: none;
   text-align: left;
@@ -529,7 +529,7 @@ h1 { font-size: 24px; line-height: 1.25; font-weight: 600; }
 h2 { font-size: 18px; line-height: 26px; margin-bottom: 12px; font-weight: 600; }
 h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
 .section { margin-top: 24px; }
-.summary { grid-template-columns: repeat(4, 88px); }
+.summary { grid-template-columns: repeat(5, 88px); }
 .summary-card {
   min-height: 56px;
   border-radius: 6px;
@@ -653,6 +653,7 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
         <button class="summary-card" type="button" data-filter="held"><span>{{ portfolio_stats.held_count }}</span><label>持仓</label></button>
         <button class="summary-card" type="button" data-filter="grid"><span>{{ portfolio_stats.grid_count }}</span><label>网格</label></button>
         <button class="summary-card" type="button" data-filter="pool"><span>{{ portfolio_stats.pool_count }}</span><label>ETF池</label></button>
+        <button class="summary-card" type="button" data-filter="tgrid"><span>{{ portfolio_stats.t_grid_count }}</span><label>T网格</label></button>
         <button class="summary-card is-active" type="button" data-filter="all"><span>{{ portfolio_stats.all_count }}</span><label>全部</label></button>
       </div>
     </header>
@@ -739,8 +740,9 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
         </div>
         <div class="tab-panel" data-panel="grid">
           {% if nav_dashboard.grid_groups %}
+          <div class="decision-panel">
           {% for group in nav_dashboard.grid_groups %}
-          <section class="cluster filter-group">
+          <section class="cluster filter-group" style="--group-count: {{ group.count }}">
             <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> <span class="cluster-count" data-count>{{ group.count }}</span></h3>
             <div class="mini-list">
               {% for etf in group.etfs %}
@@ -749,6 +751,7 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
             </div>
           </section>
           {% endfor %}
+          </div>
           {% else %}
           <div class="risk-empty">无可执行双边网格建议</div>
           {% endif %}
