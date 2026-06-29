@@ -178,7 +178,7 @@ EXIT_TREND_POSITION 比 SELL 更中性，表示退出短线仓位或降至观察
 {
   "shortTrendScore": 82.0,
   "trendLevel": "UPTREND",
-  "trendName": "趋势偏强区",
+  "trendName": "短线上升趋势",
   "scores": {
     "maScore": 30,
     "bollScore": 20,
@@ -321,11 +321,11 @@ score.md 输出的 ShortTrendScore
 趋势等级解释：
 
 ```text
-ShortTrendScore >= 85  强趋势健康区
-ShortTrendScore >= 70  趋势偏强区
-ShortTrendScore >= 55  震荡偏强区
-ShortTrendScore >= 40  弱势震荡区
-ShortTrendScore < 40   弱势区
+ShortTrendScore >= 85  短线强趋势
+ShortTrendScore >= 75  短线上升趋势
+ShortTrendScore >= 60  震荡偏强
+ShortTrendScore >= 45  震荡观察
+ShortTrendScore < 45   短线转弱
 ```
 
 ---
@@ -571,8 +571,8 @@ def decide_rule(etf, position, portfolio):
   "maxReduceStepRatio": 0.30,
   "maxWeakTrendReduceStepRatio": 0.50,
   "strongTrendScore": 85,
-  "uptrendScore": 70,
-  "weakTrendScore": 40
+  "uptrendScore": 75,
+  "weakTrendScore": 45
 }
 ```
 
@@ -596,11 +596,11 @@ def decide_rule(etf, position, portfolio):
 1. score.md 不输出 ATR_RISK_DEDUCT。
 2. rule.md 不再调用 calc_trend_score / momentumScore / riskScore / totalScore。
 3. ShortTrendScore >= 85 且无追高提示，未持仓输出 OPEN，但首笔目标仓位不超过 15%。
-4. ShortTrendScore >= 70 且无追高提示，未持仓输出 LIGHT_OPEN。
-5. ShortTrendScore < 70，未持仓输出 WATCH。
+4. ShortTrendScore >= 75 且无追高提示，未持仓输出 LIGHT_OPEN。
+5. ShortTrendScore < 75，未持仓输出 WATCH。
 6. 已持仓时，targetPositionRatio > currentPositionRatio + 5%，输出 ADD。
 7. 已持仓时，targetPositionRatio < currentPositionRatio - 5%，输出 REDUCE。
-8. ShortTrendScore < 40 且 close < MA5 且 MA5 < MA10，输出 EXIT_TREND_POSITION。
+8. ShortTrendScore < 45 且 close < MA5 且 MA5 < MA10，输出 EXIT_TREND_POSITION。
 9. 出现 RSI短线过热 / BIAS严重偏离MA5 / 接近布林上轨 / 放量急涨时，目标仓位降档。
 10. BOLL_POSITION >= 0.90、RSI6 >= 70、BIAS12 >= 6%、BIAS24 >= 10% 时必须生成追高风险标签；未持仓不得输出普通建仓，已有持仓不得继续扩大买入侧。
 11. ATR 放大只能影响 grid.md，不能反向修改 ShortTrendScore 或 TrendLevel。
@@ -647,4 +647,4 @@ execution_mode = NO_EXECUTION / SELL_ONLY_CLEAR_CANDIDATE / REDUCE_OR_PROTECT / 
 1. ETF 类型、黄金特殊性、同类 ETF 集中度只作为解释或人工筛选信息，不自动阻断强趋势标的。
 2. `target_position_ratio` 继续输出为“趋势动作力度参考”，不再作为配置型硬上限。
 3. 没有可用现金字段时，不假设现金充足；新增买入不被放大，但也不回退到单只固定仓位上限。
-4. `ShortTrendScore < 40` 的持仓标的必须进入卖出/清仓候选语义，不再显示普通持有或降低买入侧。
+4. `ShortTrendScore < 45` 的持仓标的必须进入卖出/清仓候选语义，不再显示普通持有或降低买入侧。

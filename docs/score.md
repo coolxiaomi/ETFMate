@@ -136,7 +136,7 @@ ATR 应进入独立模块：
 条件单参数调整
 ```
 
-趋势评分输出中不得出现：
+本文件中不再出现：
 
 ```text
 ATR_RISK_DEDUCT
@@ -180,19 +180,19 @@ RSI
 | 模块 | 最高分 | 说明 |
 |---|---:|---|
 | MA_SCORE | 35 | 看 close / MA5 / MA10 / MA20 / MA5斜率 |
-| VOL_SCORE | 20 | 看 vol_ratio_1_5 和 vol_ratio_5_20 |
 | BOLL_SCORE | 20 | 看 boll_position |
-| RSI_SCORE | 15 | 看 rsi6，区间型健康动能修正 |
+| VOL_SCORE | 15 | 看 vol_ratio_1_5 和 vol_ratio_5_20 |
+| RSI_SCORE | 20 | 看 rsi6 |
 | BIAS_SCORE | 10 | 看 bias5_ratio |
-| 合计 | 100 | 趋势主评分与健康修正合计 100 分 |
+| 合计 | 100 | 五项正向指标合计 100 分 |
 
 说明：
 
 ```text
 MA 是主趋势因子；
+BOLL 和 RSI 是位置与动能确认；
 VOL 是趋势有效性确认；
-BOLL 是趋势位置确认；
-RSI 和 BIAS 是健康度修正，不是越高越好的正向指标。
+BIAS 是短线偏离修正。
 ```
 
 ---
@@ -440,19 +440,19 @@ else:
 
 ---
 
-### 10.3 VOL_SCORE，满分 20
+### 10.3 VOL_SCORE，满分 15
 
 评分规则：
 
 ```text
 if VOL_RATIO_1_5 >= 1.3 and VOL_RATIO_5_20 >= 1.0:
-    VOL_SCORE = 20
+    VOL_SCORE = 15
 else if VOL_RATIO_1_5 >= 1.1:
-    VOL_SCORE = 16
+    VOL_SCORE = 12
 else if VOL_RATIO_1_5 >= 0.9:
-    VOL_SCORE = 10
+    VOL_SCORE = 8
 else:
-    VOL_SCORE = 5
+    VOL_SCORE = 4
 ```
 
 解释：
@@ -466,30 +466,30 @@ else:
 
 ---
 
-### 10.4 RSI_SCORE，满分 15
+### 10.4 RSI_SCORE，满分 20
 
 评分规则：
 
 ```text
-if RSI6 < 40:
-    RSI_SCORE = 0
-else if RSI6 < 50:
-    RSI_SCORE = 5
-else if RSI6 <= 65:
-    RSI_SCORE = 15
-else if RSI6 <= 75:
-    RSI_SCORE = 12
+if RSI6 > 50 and RSI6 <= 75:
+    RSI_SCORE = 20
+else if RSI6 > 75 and RSI6 <= 85:
+    RSI_SCORE = 14
+else if RSI6 > 85:
+    RSI_SCORE = 8
+else if RSI6 >= 40 and RSI6 <= 50:
+    RSI_SCORE = 10
 else:
-    RSI_SCORE = 5
+    RSI_SCORE = 3
 ```
 
 解释：
 
 ```text
-RSI6 低于 40 代表弱势动能；
-RSI6 在 50~65 之间代表健康上升动能，给最高分；
-RSI6 在 65~75 之间代表强势但略热，不再满分；
-RSI6 超过 75 后不继续加分，视为追高风险上升。
+RSI6 在 50~75 之间代表短线多头动能健康；
+RSI6 在 75~85 之间代表动能强但偏热；
+RSI6 超过 85 代表短线过热，不直接归零，但应输出“RSI短线过热”标签；
+RSI6 低于 40，说明短线动能较弱。
 ```
 
 ---
@@ -499,25 +499,26 @@ RSI6 超过 75 后不继续加分，视为追高风险上升。
 评分规则：
 
 ```text
-if BIAS5 < 0:
-    BIAS_SCORE = 0
-else if BIAS5 <= 0.03:
+if BIAS5 > 0 and BIAS5 <= 0.025:
     BIAS_SCORE = 10
-else if BIAS5 <= 0.06:
-    BIAS_SCORE = 7
-else if BIAS5 <= 0.10:
-    BIAS_SCORE = 3
+else if BIAS5 > 0.025 and BIAS5 <= 0.04:
+    BIAS_SCORE = 8
+else if BIAS5 > 0.04 and BIAS5 <= 0.06:
+    BIAS_SCORE = 5
+else if BIAS5 > 0.06:
+    BIAS_SCORE = 2
+else if BIAS5 <= 0 and BIAS5 >= -0.02:
+    BIAS_SCORE = 5
 else:
-    BIAS_SCORE = 0
+    BIAS_SCORE = 2
 ```
 
 解释：
 
 ```text
-BIAS5 小幅正偏离代表价格站上 MA5 且偏离仍健康；
-BIAS5 中度正偏离说明趋势偏强但已有涨幅；
-BIAS5 过高说明价格远离 MA5，追高风险上升；
-BIAS5 为负说明价格低于 MA5，趋势偏弱，不给分。
+略高于 MA5 代表短线强势；
+距离 MA5 太远，说明短线追高风险上升；
+跌破 MA5 说明短线趋势开始转弱。
 ```
 
 ---
@@ -529,30 +530,30 @@ BIAS5 为负说明价格低于 MA5，趋势偏弱，不给分。
 ```text
 if ShortTrendScore >= 85:
     TrendLevel = "STRONG_TREND"
-    TrendName = "强趋势健康区"
-else if ShortTrendScore >= 70:
+    TrendName = "短线强趋势"
+else if ShortTrendScore >= 75:
     TrendLevel = "UPTREND"
-    TrendName = "趋势偏强区"
-else if ShortTrendScore >= 55:
+    TrendName = "短线上升趋势"
+else if ShortTrendScore >= 60:
     TrendLevel = "WEAK_UPTREND"
     TrendName = "震荡偏强"
-else if ShortTrendScore >= 40:
+else if ShortTrendScore >= 45:
     TrendLevel = "SIDEWAYS"
-    TrendName = "弱势震荡区"
+    TrendName = "震荡观察"
 else:
     TrendLevel = "WEAK"
-    TrendName = "弱势区"
+    TrendName = "短线转弱"
 ```
 
 等级含义：
 
 | 分数区间 | 等级 | 含义 |
 |---:|---|---|
-| `>= 85` | 强趋势健康区 | 趋势明确，可持有或顺势加仓 |
-| `70 ~ 84` | 趋势偏强区 | 适合持有，谨慎加仓 |
-| `55 ~ 69` | 震荡偏强区 | 观察为主，避免重仓追入 |
-| `40 ~ 54` | 弱势震荡区 | 减少主动加仓，考虑降低仓位 |
-| `< 40` | 弱势区 | 趋势较差，考虑减仓或清仓 |
+| `>= 85` | 短线强趋势 | 均线结构、价格位置、动能和量能整体较强 |
+| `>= 75` | 短线上升趋势 | 多头结构较明显，但可能存在局部追高或量能不足 |
+| `>= 60` | 震荡偏强 | 有一定强势特征，但趋势确认不足 |
+| `>= 45` | 震荡观察 | 趋势不清晰，适合观察和复核 |
+| `< 45` | 短线转弱 | 均线、动能或位置明显走弱 |
 
 说明：
 
@@ -632,17 +633,17 @@ ATR风险扣分
   "name": "沪深300ETF",
   "etfType": "BROAD_BASED",
   "tradeDate": "2026-06-25",
-  "shortTrendScore": 81.0,
+  "shortTrendScore": 82.0,
   "trendLevel": "UPTREND",
-  "trendName": "趋势偏强区",
+  "trendName": "短线上升趋势",
   "dataSufficient": true,
   "scores": {
     "maScore": 30,
     "bollScore": 20,
-    "volScore": 16,
-    "rsiScore": 5,
-    "biasScore": 10,
-    "shortTrendScore": 81.0
+    "volScore": 12,
+    "rsiScore": 14,
+    "biasScore": 6,
+    "shortTrendScore": 82.0
   },
   "indicators": {
     "close": 4.125,
@@ -764,16 +765,16 @@ close == 0
 ## 15. 使用建议
 
 ```text
-ShortTrendScore >= 70:
+ShortTrendScore >= 75:
     可进入短线趋势候选池
 
 ShortTrendScore >= 85:
     标记为短线强趋势
 
-ShortTrendScore < 55:
+ShortTrendScore < 60:
     不进入短线强趋势候选池
 
-ShortTrendScore < 40:
+ShortTrendScore < 45:
     触发趋势复核或持仓复核提示
 ```
 
@@ -827,6 +828,6 @@ FinalScore = 0.7 * MomentumScore + 0.3 * ShortTrendScore
 3. 五项正向指标合计 100 分，不需要 `/90 * 100` 归一化。
 4. ATR 不进入趋势评分，不生成 ATR 扣分，也不影响趋势等级。
 5. ATR 应迁移到网格建议或独立波动模块。
-6. 趋势等级使用 85 / 70 / 55 / 40 新分层，不保留旧 75 / 60 / 45 边界。
+6. 趋势等级不再使用“强势进攻区”，改为“短线强趋势”。
 7. 系统输出应是分析与风险提示，不应输出绝对买卖指令。
 8. 追高护栏必须读取多周期位置：BOLL_POSITION >= 0.90、RSI6 >= 70、BIAS12 >= 6%、BIAS24 >= 10% 都应生成风险标签；其中 BIAS24 严重正乖离应进入高风险。
