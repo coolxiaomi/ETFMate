@@ -20,6 +20,7 @@
 - `docs/action.md`：仓位动作。
 - `docs/rule.md`：规则引擎、ETF 池和 AI 边界。
 - `docs/grid.md`：Touker 网格建议。
+- `docs/t-grid.md`：震荡网格（T网格）候选筛选、参数、生命周期、回测估算和报告隔离契约。
 - `docs/report.md`：HTML 报告展示契约。
 - `docs/data-quality.md`：采集完整性、字段完整性和 analyze/report 前的硬阻断闸门。
 

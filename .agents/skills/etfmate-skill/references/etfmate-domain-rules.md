@@ -11,6 +11,7 @@
 - `docs/action.md`：趋势评分到仓位动作、目标仓位和禁用交易指令文案。
 - `docs/rule.md`：ETF 池过滤、交易硬过滤、规则引擎数据流和 AI 复核边界。
 - `docs/grid.md`：Touker 网格建议、基准价、买入反弹/卖出回落、风险联动和回归测试。
+- `docs/t-grid.md`：震荡网格（T网格）候选筛选、参数、生命周期、回测估算和报告隔离契约。
 - `docs/report.md`：HTML 报告展示排序、风险页聚合和展示契约。
 - `docs/data-quality.md`：采集完整性、字段完整性、universe 对账和报告前硬阻断。
 
@@ -28,6 +29,7 @@
 - 持仓、已清仓、交易记录和自选 ETF 池都是滚动加载列表，必须滚动到底并累积每屏 DOM/table/text 证据。
 - 交易记录必须覆盖“本月”“近三月”“近半年”“今年”“自定义”5 个子 tab。
 - 自选 ETF 池必须保存纳入列表、过滤列表和过滤原因；自选未持仓标的也进入行情、规则评分、AI 复核和报告。
+- T网格是自选池上的独立分析类型，只分析 clean watchlist ETF；不得用持仓、Touker 网格、交易记录、样例代码或手工代码扩展 T网格 universe。
 - 投资账本页面没有“可卖数量/可用数量”列；不要生成 T+1 可卖数量护栏。
 
 Touker：
@@ -64,6 +66,7 @@ Touker：
 ## AI 复核与报告
 
 - `analyze` 生成 `data/raw/market/RUN_ID/ai_review_input.json`。
+- `analyze` 同时生成 `analysis.json` 中的 `t_grid_advices`；它复用同一份自选池采集结果，不新增独立登录态采集项目。
 - 宿主 AI 使用当前会话模型读取 `ai_review_input.json`，写回 `data/raw/market/RUN_ID/ai_judgements.json`。
 - ETFMate 本地 CLI 不要求用户额外配置 API Key 或模型。
 - AI 只做规则引擎后的证据复核；硬过滤、流动性约束、仓位约束、Touker 采集完整性和数据缺失降级优先。
@@ -101,6 +104,7 @@ runtime/
 - 强趋势盈利网格：趋势评分高、风险低且已有盈利时，不得因 ATR 公式把现有 Touker 卖出上升触发收紧成更早止盈。
 - 网格风险联动：趋势弱或过热时必须切换到 `WEAK_REDUCE`、`ONLY_SELL_OR_CLEAR` 或 `PROFIT_PROTECTION`，不得维持正常买入侧。
 - 买入反弹和卖出回落必须按 `docs/grid.md` 的基准价分档，且同一 ETF 两者相等。
+- T网格结果必须展示在独立 `T网格` tab，不计入现有 `网格` 或 `执行策略` tab；收益估算必须标记为历史估算，不得输出“可用数量为0”“今日不可卖”或 `0股` 条件单。
 
 推荐验证命令：
 

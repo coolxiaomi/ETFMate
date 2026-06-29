@@ -22,10 +22,11 @@ from etfmate.analysis.data_quality import (
 from etfmate.analysis.grid_advisor import advise_grid
 from etfmate.analysis.layered_context import build_layered_context, context_to_dict
 from etfmate.analysis.recommendation import recommend
+from etfmate.analysis.t_grid import analyze_t_grid_candidates, results_to_dicts
 from etfmate.analysis.trade_reviewer import review_trade_periods, review_trades
 from etfmate.browser import ths_account, touker_grid
 from etfmate.browser.session import LoginRequiredError, WebAccessNotReadyError, require_web_access_proxy
-from etfmate.market.providers import build_market_snapshot, normalize_etf_code
+from etfmate.market.providers import build_market_snapshot, fetch_daily_ohlcv, normalize_etf_code
 from etfmate.report.daily_report import write_report
 from etfmate.storage.models import GridConfig, Position, Trade, WatchItem
 from etfmate.storage.repository import read_json, run_id_str, write_json
@@ -160,7 +161,16 @@ def run_analyze(root: Path, run_id: str) -> None:
         )
         for item in snapshots
     ]
-    ai_review_input = build_ai_review_input(recommendations, grid_advices)
+    t_grid_data, t_grid_sources = _t_grid_daily_data(watchlist)
+    t_grid_advices = results_to_dicts(
+        analyze_t_grid_candidates(
+            t_grid_data,
+            etf_name_map={item.code: item.name for item in watchlist},
+            grid_qty=1000,
+            data_source_map=t_grid_sources,
+        )
+    )
+    ai_review_input = build_ai_review_input(recommendations, grid_advices, t_grid_advices)
     ai_judgements = load_host_ai_judgements(root, run_id, recommendations)
     recommendations = attach_ai_judgements(recommendations, ai_judgements)
     run_date = _run_date(run_id)
@@ -177,6 +187,7 @@ def run_analyze(root: Path, run_id: str) -> None:
         "layered_contexts": {code: context_to_dict(context) for code, context in layered_contexts.items()},
         "recommendations": recommendations,
         "grid_advices": grid_advices,
+        "t_grid_advices": t_grid_advices,
         "ai_review_input_path": f"data/raw/market/{run_id}/{AI_REVIEW_INPUT_FILE}",
         "ai_judgements": ai_judgements,
         "trade_review": review_trades(trades),
@@ -203,6 +214,7 @@ def run_report(root: Path, run_id: str) -> None:
     require_data_quality_pass(quality, "报告前")
     recommendations = analysis.get("recommendations", [])
     grid_advices = analysis.get("grid_advices", [])
+    t_grid_advices = analysis.get("t_grid_advices", [])
     ai_judgements = load_host_ai_judgements(root, run_id, recommendations)
     recommendations = attach_ai_judgements(recommendations, ai_judgements)
     review = analysis.get("trade_review") or review_trades([])
@@ -254,6 +266,12 @@ def run_report(root: Path, run_id: str) -> None:
             {"label": "Touker 网格", "count": f"{grids_count}（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker", "note": "完整" if grids_count else "无数据"},
             {"label": "行情/K 线", "count": f"{len(snapshots)} 只", "source": "; ".join(sorted(sources)) or "N/A", "note": "由 a-stock-data/本地行情适配器决策"},
             {
+                "label": "T网格",
+                "count": f"{len(t_grid_advices)} 只",
+                "source": "同花顺自选ETF池 + 完整日线OHLCV",
+                "note": "只分析自选池ETF；收益为历史估算，不代表未来收益",
+            },
+            {
                 "label": "七层证据",
                 "count": f"{layer_count} 只，平均置信度 {_fmt_pct(avg_layer_confidence)}",
                 "source": layer_sources,
@@ -268,7 +286,7 @@ def run_report(root: Path, run_id: str) -> None:
         ]
     }
     label = analysis.get("analysis_time") or _analysis_time(run_id)
-    out = write_report(root / "data/reports" / f"{run_id}-etf-realtime.html", label, recommendations, grid_advices, review, data_completeness)
+    out = write_report(root / "data/reports" / f"{run_id}-etf-realtime.html", label, recommendations, grid_advices, review, data_completeness, t_grid_advices)
     print(f"已生成实时报告: {out}")
 
 
@@ -291,6 +309,20 @@ def run_ai_attach(root: Path, run_id: str, input_path: Path) -> None:
 def _require_items(payload: Any, key: str, message: str) -> None:
     if not _items(payload, key):
         raise RuntimeError(message)
+
+
+def _t_grid_daily_data(watchlist: list[WatchItem]) -> tuple[dict[str, Any], dict[str, str]]:
+    data: dict[str, Any] = {}
+    sources: dict[str, str] = {}
+    for item in watchlist:
+        try:
+            df, source = fetch_daily_ohlcv(item.code)
+            data[item.code] = df
+            sources[item.code] = source
+        except Exception as exc:
+            data[item.code] = []
+            sources[item.code] = f"kline:error:{type(exc).__name__}"
+    return data, sources
 
 
 def _run_date(run_id: str) -> str:

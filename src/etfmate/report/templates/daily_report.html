@@ -667,6 +667,7 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
           <button class="tab-button" type="button" data-tab="grid">网格</button>
           <button class="tab-button" type="button" data-tab="strategy">执行策略</button>
           <button class="tab-button" type="button" data-tab="risk">风险</button>
+          <button class="tab-button" type="button" data-tab="tgrid">T网格</button>
         </div>
         <div class="tab-panel is-active" data-panel="decision">
           <div class="decision-panel">
@@ -778,6 +779,27 @@ h3 { font-size: 15px; line-height: 22px; font-weight: 600; }
           </div>
           {% else %}
           <div class="risk-empty">无高风险项</div>
+          {% endif %}
+        </div>
+        <div class="tab-panel" data-panel="tgrid">
+          <div class="metric-row">
+            <span class="metric-chip">自选池 {{ nav_dashboard.t_grid_summary.count }} 只</span>
+            <span class="metric-chip profit">候选 {{ nav_dashboard.t_grid_summary.candidate_count }} 只</span>
+            <span class="metric-chip warn">拒绝 {{ nav_dashboard.t_grid_summary.rejected_count }} 只</span>
+          </div>
+          {% if nav_dashboard.t_grid_groups %}
+          {% for group in nav_dashboard.t_grid_groups %}
+          <section class="cluster filter-group">
+            <h3 class="cluster-title"><span class="{{ group.class }}">{{ group.action }}</span> <span class="cluster-count" data-count>{{ group.count }}</span></h3>
+            <div class="mini-list">
+              {% for etf in group.etfs %}
+              <a class="mini-chip filter-item" data-tags="{{ etf.filter_tags }}" href="#{{ etf.id }}"><span class="{{ etf.t_grid_action_class }}">{{ etf.t_grid_action_short }}</span><span class="mini-code {{ etf.pnl_class }}">{{ etf.code }}</span><span class="mini-name">{{ etf.name }}</span><span class="mini-pnl">{{ etf.t_grid_score | default('-', true) }}</span></a>
+              {% endfor %}
+            </div>
+          </section>
+          {% endfor %}
+          {% else %}
+          <div class="risk-empty">无T网格分析结果</div>
           {% endif %}
         </div>
       </section>

@@ -127,6 +127,24 @@ def tencent_daily_kline(code: str, count: int = 260) -> pd.DataFrame:
     return df.dropna(subset=["open", "close", "high", "low", "volume"])
 
 
+def fetch_daily_ohlcv(code: str, count: int = 260) -> tuple[pd.DataFrame, str]:
+    """Return daily OHLCV data with amount when the upstream source provides it."""
+    errors: list[str] = []
+    for source, fetcher in (("baidu", baidu_daily_kline), ("tencent", tencent_daily_kline)):
+        try:
+            if source == "tencent":
+                df = fetcher(code, count=count)
+            else:
+                df = fetcher(code)
+                if len(df) > count:
+                    df = df.tail(count)
+            normalized = _normalize_ohlcv(df)
+            return normalized, f"kline:{source}"
+        except Exception as exc:
+            errors.append(f"{source}:{type(exc).__name__}")
+    raise RuntimeError("日线数据获取失败: " + ",".join(errors))
+
+
 def build_market_snapshot(code: str) -> MarketSnapshot:
     code = normalize_etf_code(code)
     quote = tencent_quote([code]).get(code, {})
@@ -208,6 +226,23 @@ def build_market_snapshot(code: str) -> MarketSnapshot:
         kline_days=int(latest("kline_days") or 0) if latest("kline_days") is not None else None,
         data_quality=";".join(quality),
     )
+
+
+def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    rename = {"date": "trade_date", "datetime": "trade_date", "time": "trade_date"}
+    out = out.rename(columns=rename)
+    if "trade_date" not in out.columns:
+        out["trade_date"] = range(len(out))
+    for column in ("open", "high", "low", "close", "volume"):
+        if column not in out.columns:
+            raise ValueError(f"K线缺少字段: {column}")
+        out[column] = pd.to_numeric(out[column], errors="coerce")
+    if "amount" not in out.columns:
+        out["amount"] = 0.0
+    out["amount"] = pd.to_numeric(out["amount"], errors="coerce").fillna(0.0)
+    columns = ["trade_date", "open", "high", "low", "close", "volume", "amount"]
+    return out[columns].dropna(subset=["open", "high", "low", "close", "volume"]).reset_index(drop=True)
 
 
 def _float(value: str) -> float:

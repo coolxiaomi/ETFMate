@@ -27,6 +27,8 @@ data/raw/market/RUN_ID/data_quality.json
 
 当 `status=FAIL` 时，CLI 必须返回失败，不生成最终分析、HTML 报告或 ShareOne 发布产物。
 
+T网格不引入独立采集项目。它在 `analyze` 阶段复用同一份同花顺自选 ETF 池，输出 `analysis.json` 的 `t_grid_advices`；如果自选池采集未通过质量闸门，T网格也不得生成正式建议。
+
 ## 2. P0 硬阻断
 
 以下任一情况必须停止：
@@ -46,6 +48,8 @@ data/raw/market/RUN_ID/data_quality.json
 13. 行情 `data_quality` 包含 `missing` 或 `error`。
 14. 规则建议或网格建议缺少 universe 代码。
 15. 规则建议缺少 `rule_decision`。
+
+说明：T网格行情日线缺失或成交额无法确认时，应在对应 ETF 的 `t_grid_advices` 中输出拒绝原因；这不替代上面的同花顺/Touker 采集质量闸门，也不能绕过正式报告前检查。
 
 ## 3. 降级但不硬阻断
 

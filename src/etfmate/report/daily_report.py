@@ -19,9 +19,10 @@ def render_html(
     grid_advices: list[dict],
     trade_review: dict,
     data_completeness: dict | None = None,
+    t_grid_advices: list[dict] | None = None,
 ) -> str:
     template = _template_env().get_template("daily_report.html")
-    etfs = _sort_etfs_for_display([_etf_view(item) for item in _group_by_etf(recommendations, grid_advices)])
+    etfs = _sort_etfs_for_display([_etf_view(item) for item in _group_by_etf(recommendations, grid_advices, t_grid_advices or [])])
     return template.render(
         date=date,
         recommendations_count=len(recommendations),
@@ -62,9 +63,10 @@ def write_report(
     grid_advices: list[dict],
     trade_review: dict,
     data_completeness: dict | None = None,
+    t_grid_advices: list[dict] | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_html(date, recommendations, grid_advices, trade_review, data_completeness), encoding="utf-8")
+    path.write_text(render_html(date, recommendations, grid_advices, trade_review, data_completeness, t_grid_advices), encoding="utf-8")
     return path
 
 
@@ -77,14 +79,14 @@ def _template_env() -> Environment:
     )
 
 
-def _group_by_etf(recommendations: list[dict], grid_advices: list[dict]) -> list[dict]:
+def _group_by_etf(recommendations: list[dict], grid_advices: list[dict], t_grid_advices: list[dict] | None = None) -> list[dict]:
     result: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for item in recommendations:
         code = str(item.get("code") or "")
         if not code:
             continue
-        result.setdefault(code, {"code": code, "recommendation": None, "grid": None})
+        result.setdefault(code, {"code": code, "recommendation": None, "grid": None, "t_grid": None})
         result[code]["recommendation"] = item
         result[code]["name"] = _preferred_name(result[code].get("name"), item.get("name"), code)
         if code not in order:
@@ -95,12 +97,19 @@ def _group_by_etf(recommendations: list[dict], grid_advices: list[dict]) -> list
             continue
         result[code]["grid"] = item
         result[code]["name"] = _preferred_name(result[code].get("name"), item.get("name"), code)
+    for item in t_grid_advices or []:
+        code = str(item.get("code") or "")
+        if not code or code not in result:
+            continue
+        result[code]["t_grid"] = item
+        result[code]["name"] = _preferred_name(result[code].get("name"), item.get("name"), code)
     return [result[code] for code in order]
 
 
 def _etf_view(item: dict) -> dict[str, Any]:
     rec = item.get("recommendation")
     grid = item.get("grid")
+    t_grid = item.get("t_grid")
     code = item["code"]
     name = item.get("name") or code
     action = str(rec.get("action") if rec else "无持仓建议")
@@ -149,14 +158,19 @@ def _etf_view(item: dict) -> dict[str, Any]:
         "nav_meta": nav["meta"],
         "grid_action_short": grid_short if is_grid else _compact_strategy_action(grid),
         "grid_action_class": _grid_action_class(grid_action),
+        "t_grid": _t_grid_view(t_grid),
+        "has_t_grid": bool(t_grid),
+        "t_grid_action_short": _compact_t_grid_action(t_grid),
+        "t_grid_action_class": _t_grid_action_class(t_grid),
+        "t_grid_score": _float_or_none(t_grid.get("t_grid_score")) if t_grid else None,
         "title_meta": _title_meta(rec, grid),
         "action_pill": _pill(_compact_action(_display_action(action)), _action_class(action)),
         "grid_pill": _grid_or_strategy_pill(grid, grid_action),
-        "holding": _holding_view(rec, grid),
+        "holding": _holding_view(rec, grid, t_grid),
     }
 
 
-def _holding_view(item: dict | None, grid: dict | None = None) -> dict[str, Any]:
+def _holding_view(item: dict | None, grid: dict | None = None, t_grid: dict | None = None) -> dict[str, Any]:
     if not item:
         return {"empty": True, "message": "无当前持仓或行情建议。", "rows": []}
     rows = [
@@ -169,6 +183,7 @@ def _holding_view(item: dict | None, grid: dict | None = None) -> dict[str, Any]
         _row("MACD(指数平滑异同)", _macd_summary(item), _macd_compare(item), _macd_alert(item)),
         _row("规则", _rule_score_summary(item), _rule_score_detail(item), _rule_score_alert(item)),
         _merged_row(_grid_section_label(grid), _grid_table_html(grid)),
+        _merged_row("T网格", _t_grid_table_html(t_grid)),
         _merged_row("综合结论", _combined_conclusion_html(item)),
         _merged_row("明细", _detail_drawer_html(item)),
     ]
@@ -220,6 +235,79 @@ def _grid_table_html(item: dict | None) -> str:
         "</table>"
         "</div>"
     )
+
+
+def _t_grid_view(item: dict | None) -> dict[str, Any]:
+    if not item:
+        return {"empty": True, "message": "未出现在本次自选池T网格分析中。"}
+    return {"empty": False, **item}
+
+
+def _t_grid_table_html(item: dict | None) -> str:
+    if not item:
+        return '<span class="empty">未出现在本次自选池T网格分析中。</span>'
+    action = str(item.get("t_grid_action") or "观察，不开启T网格")
+    score = _num(item.get("t_grid_score"), 0)
+    level = _cell(item.get("t_grid_level"))
+    candidate = "是" if item.get("is_t_grid_candidate") else "否"
+    trigger = _ratio_pct(item.get("trigger_probability"))
+    hit = _ratio_pct(item.get("hit_rate"))
+    avg_days = _format_with_suffix(item.get("avg_close_days"), "天")
+    annual = _format_with_suffix(item.get("risk_adjusted_annual_return_pct"), "%")
+    parts = [
+        _inline_label("结论", f"{action}；候选 {candidate}；评分 {score}；{level}"),
+        _inline_label(
+            "参数",
+            f"间距 {_format_with_suffix(item.get('suggest_grid_step_pct'), '%')}；上沿 {_format_with_suffix(item.get('grid_upper'), '')}；下沿 {_format_with_suffix(item.get('grid_lower'), '')}",
+        ),
+        _inline_label(
+            "格数",
+            f"向上 {int(_float_or_none(item.get('grid_count_up')) or 0)} 格；向下 {int(_float_or_none(item.get('grid_count_down')) or 0)} 格；每格 {_num(item.get('grid_qty'), 0)} 份",
+        ),
+        _inline_label(
+            "资金",
+            f"单格 {_num(item.get('one_grid_cash'), 2)}；建议总资金 {_num(item.get('suggest_total_cash'), 2)}；执行前需人工核对现金和底仓",
+        ),
+        _inline_label("历史估算", f"触发 {trigger}；闭环 {hit}；平均闭环 {avg_days}；风险调整年化 {annual}，不代表未来收益"),
+        _inline_label("通过理由", "；".join(item.get("reason") or [])),
+        _inline_label("拒绝原因", "；".join(item.get("reject_reason") or [])),
+        _inline_label("风险", "；".join(item.get("risk") or [])),
+    ]
+    return _join_html(parts)
+
+
+def _compact_t_grid_action(item: dict | None) -> str:
+    if not item:
+        return "无T网格"
+    action = str(item.get("t_grid_action") or "")
+    if "开启" in action:
+        return "开启T网格"
+    if "暂停全部" in action:
+        return "暂停全部"
+    if "暂停T网格买入" in action:
+        return "暂停买入"
+    if "暂停T网格卖出" in action:
+        return "暂停卖出"
+    if "关闭" in action:
+        return "关闭T网格"
+    if "观察" in action:
+        return "观察"
+    return action or "无T网格"
+
+
+def _t_grid_action_class(item: dict | None) -> str:
+    if not item:
+        return "neutral"
+    if item.get("is_t_grid_candidate"):
+        return "action-buy"
+    action = str(item.get("t_grid_action") or "")
+    if "关闭" in action:
+        return "action-sell"
+    if "暂停" in action:
+        return "action-pause"
+    if "观察" in action:
+        return "attention"
+    return "neutral"
 
 
 def _grid_or_strategy_pill(grid: dict | None, grid_action: str) -> str:
@@ -419,6 +507,8 @@ def _nav_dashboard(etfs: list[dict[str, Any]]) -> dict[str, Any]:
         "strategy_groups": _strategy_groups(etfs),
         "risk_summary": _risk_summary(etfs),
         "risk_items": _risk_items(etfs),
+        "t_grid_groups": _t_grid_groups(etfs),
+        "t_grid_summary": _t_grid_summary(etfs),
     }
 
 
@@ -518,6 +608,43 @@ def _strategy_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             for key, items in sorted(groups.items(), key=lambda pair: (-len(pair[1]), pair[0]))
         )
     ]
+
+
+def _t_grid_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    order = ["开启T网格", "观察", "暂停买入", "暂停卖出", "暂停全部", "关闭T网格", "无T网格"]
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for etf in etfs:
+        if not etf.get("has_t_grid"):
+            continue
+        key = str(etf.get("t_grid_action_short") or "无T网格")
+        groups.setdefault(key, []).append(etf)
+    result = []
+    for key in order + sorted(key for key in groups if key not in order):
+        items = _sort_t_grid_items(groups.get(key) or [])
+        if items:
+            result.append({"action": key, "count": len(items), "class": items[0].get("t_grid_action_class", "neutral"), "etfs": items})
+    return result
+
+
+def _t_grid_summary(etfs: list[dict[str, Any]]) -> dict[str, Any]:
+    items = [item for item in etfs if item.get("has_t_grid")]
+    candidates = [item for item in items if (item.get("t_grid") or {}).get("is_t_grid_candidate")]
+    rejected = [item for item in items if (item.get("t_grid") or {}).get("reject_reason")]
+    return {"count": len(items), "candidate_count": len(candidates), "rejected_count": len(rejected)}
+
+
+def _sort_t_grid_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        etfs,
+        key=lambda item: (
+            -_sort_number((item.get("t_grid") or {}).get("is_t_grid_candidate")),
+            -_sort_number((item.get("t_grid") or {}).get("t_grid_score")),
+            -_sort_number((item.get("t_grid") or {}).get("risk_adjusted_annual_return_pct")),
+            -_sort_number((item.get("t_grid") or {}).get("hit_rate")),
+            -_sort_number((item.get("t_grid") or {}).get("avg_amount_20")),
+            str(item.get("code") or ""),
+        ),
+    )
 
 
 def _risk_items(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2043,6 +2170,13 @@ def _num(value: Any, digits: int) -> str:
 def _pct(value: Any) -> str:
     number = _num(value, 2)
     return "-" if number == "-" else f"{number}%"
+
+
+def _ratio_pct(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "-"
+    return f"{number * 100:.1f}%"
 
 
 def _float_or_none(value: Any) -> float | None:

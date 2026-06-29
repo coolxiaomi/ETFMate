@@ -10,7 +10,7 @@ AI_REVIEW_INPUT_FILE = "ai_review_input.json"
 AI_JUDGEMENTS_FILE = "ai_judgements.json"
 
 
-def build_ai_review_input(recommendations: list[dict], grid_advices: list[dict]) -> dict[str, Any]:
+def build_ai_review_input(recommendations: list[dict], grid_advices: list[dict], t_grid_advices: list[dict] | None = None) -> dict[str, Any]:
     return {
         "role": "host_ai_review_input",
         "instructions": (
@@ -31,7 +31,7 @@ def build_ai_review_input(recommendations: list[dict], grid_advices: list[dict])
                 }
             ]
         },
-        "items": _compact_payload(recommendations, grid_advices),
+        "items": _compact_payload(recommendations, grid_advices, t_grid_advices or []),
     }
 
 
@@ -73,13 +73,15 @@ def attach_ai_judgements(recommendations: list[dict], judgements: dict[str, dict
     return recommendations
 
 
-def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> list[dict[str, Any]]:
+def _compact_payload(recommendations: list[dict], grid_advices: list[dict], t_grid_advices: list[dict] | None = None) -> list[dict[str, Any]]:
     grids = {str(item.get("code")): item for item in grid_advices}
+    t_grids = {str(item.get("code")): item for item in (t_grid_advices or [])}
     rows = []
     for item in recommendations:
         rule = item.get("rule_decision") or {}
         context = item.get("layered_context") or {}
         grid = grids.get(str(item.get("code"))) or {}
+        t_grid = t_grids.get(str(item.get("code"))) or {}
         rows.append(
             {
                 "code": item.get("code"),
@@ -167,6 +169,27 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
                     "suggested_sell_quantity": grid.get("suggested_sell_quantity"),
                     "suggested_min_base_quantity": grid.get("suggested_min_base_quantity"),
                     "suggested_max_position_quantity": grid.get("suggested_max_position_quantity"),
+                },
+                "t_grid": {
+                    "source": t_grid.get("source"),
+                    "is_t_grid_candidate": t_grid.get("is_t_grid_candidate"),
+                    "t_grid_score": t_grid.get("t_grid_score"),
+                    "t_grid_level": t_grid.get("t_grid_level"),
+                    "t_grid_action": t_grid.get("t_grid_action"),
+                    "suggest_grid_step_pct": t_grid.get("suggest_grid_step_pct"),
+                    "grid_upper": t_grid.get("grid_upper"),
+                    "grid_lower": t_grid.get("grid_lower"),
+                    "grid_count_up": t_grid.get("grid_count_up"),
+                    "grid_count_down": t_grid.get("grid_count_down"),
+                    "grid_qty": t_grid.get("grid_qty"),
+                    "suggest_total_cash": t_grid.get("suggest_total_cash"),
+                    "trigger_probability": t_grid.get("trigger_probability"),
+                    "hit_rate": t_grid.get("hit_rate"),
+                    "avg_close_days": t_grid.get("avg_close_days"),
+                    "risk_adjusted_annual_return_pct": t_grid.get("risk_adjusted_annual_return_pct"),
+                    "reason": (t_grid.get("reason") or [])[:4],
+                    "risk": (t_grid.get("risk") or [])[:4],
+                    "reject_reason": (t_grid.get("reject_reason") or [])[:4],
                 },
                 "evidence": {
                     "confidence": context.get("confidence"),
