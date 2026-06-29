@@ -69,7 +69,7 @@ tags: 趋势解释标签数组
   "tradeDate": "2026-06-25",
   "shortTrendScore": 82.0,
   "trendLevel": "UPTREND",
-  "trendName": "短线上升趋势",
+  "trendName": "趋势偏强区",
   "currentPositionRatio": 0.20,
   "tags": [
     "短线均线多头"
@@ -255,11 +255,11 @@ boolean noTrendCaution(ShortTrendScoreResult result) {
 ```text
 if ShortTrendScore >= 85:
     baseTargetPositionRatio = 0.30
-else if ShortTrendScore >= 75:
+else if ShortTrendScore >= 70:
     baseTargetPositionRatio = 0.20
-else if ShortTrendScore >= 60:
+else if ShortTrendScore >= 55:
     baseTargetPositionRatio = 0.10
-else if ShortTrendScore >= 45:
+else if ShortTrendScore >= 40:
     baseTargetPositionRatio = 0.05
 else:
     baseTargetPositionRatio = 0.00
@@ -269,11 +269,11 @@ else:
 
 | ShortTrendScore | 趋势状态 | 基础目标仓位 |
 |---:|---|---:|
-| >= 85 | 短线强趋势 | 30% |
-| 75 ~ 85 | 短线上升趋势 | 20% |
-| 60 ~ 75 | 震荡偏强 | 10% |
-| 45 ~ 60 | 震荡观察 | 5% |
-| < 45 | 短线转弱 | 0% |
+| >= 85 | 强趋势健康区 | 30% |
+| 70 ~ 84 | 趋势偏强区 | 20% |
+| 55 ~ 69 | 震荡偏强区 | 10% |
+| 40 ~ 54 | 弱势震荡区 | 5% |
+| < 40 | 弱势区 | 0% |
 
 说明：
 
@@ -345,7 +345,7 @@ currentPositionRatio <= 0
 if ShortTrendScore >= 85 and noTrendCaution:
     action = OPEN
     targetPositionRatio = 0.10 ~ 0.15
-else if ShortTrendScore >= 75 and noTrendCaution:
+else if ShortTrendScore >= 70 and noTrendCaution:
     action = LIGHT_OPEN
     targetPositionRatio = 0.05 ~ 0.10
 else:
@@ -368,7 +368,7 @@ else:
 短线趋势较强，且未出现明显追高提示，可进入建仓观察区。建议以初始仓位参与，不建议一次性重仓。
 ```
 
-如果 `ShortTrendScore >= 75` 且无追高提示：
+如果 `ShortTrendScore >= 70` 且无追高提示：
 
 ```text
 短线趋势偏强，可轻仓建仓观察。后续需要继续观察 MA5、量能和短线动能是否保持稳定。
@@ -380,7 +380,7 @@ else:
 趋势评分较高，但存在短线过热或偏离过大，不适合直接追高，建议等待回踩 MA5 或 MA10 后重新评估。
 ```
 
-如果评分低于 75：
+如果评分低于 70：
 
 ```text
 短线趋势强度不足，暂不进入建仓区，建议继续观察。
@@ -436,7 +436,7 @@ else:
 如果出现明显转弱：
 
 ```text
-ShortTrendScore < 45
+ShortTrendScore < 40
 and close < MA5
 and MA5 < MA10
 ```
@@ -462,7 +462,7 @@ EXIT_TREND_POSITION 表示退出短线仓位或降至观察仓位，不等于系
 只有同时满足以下条件，才允许加仓：
 
 ```text
-ShortTrendScore >= 75
+ShortTrendScore >= 70
 close > MA5
 MA5 > MA10
 VOL_RATIO_1_5 >= 1.1
@@ -529,13 +529,13 @@ maxPositionRatio = 0.30
 | 观察仓 | 5% | 试错和跟踪 |
 | 初始仓 | 10% | 趋势初步确认 |
 | 标准仓 | 20% | 趋势较强 |
-| 强趋势仓 | 30% | 短线强趋势 |
+| 强趋势仓 | 30% | 强趋势健康区 |
 
 加仓路径建议：
 
 ```text
 当前仓位 = 0%
-score >= 75:
+score >= 70:
     建立 5% ~ 10% 初始仓
 
 当前仓位 = 10%
@@ -575,7 +575,7 @@ score >= 85 且连续 2 天保持强势:
 当：
 
 ```text
-ShortTrendScore < 60
+ShortTrendScore < 55
 ```
 
 说明短线趋势已经不强。
@@ -637,7 +637,7 @@ targetPositionRatio 降档为 20%
 如果出现明显转弱：
 
 ```text
-ShortTrendScore < 45
+ShortTrendScore < 40
 close < MA5
 MA5 < MA10
 ```
@@ -673,7 +673,7 @@ maxReduceStepRatio = 0.50
 判断：
 
 ```text
-if ShortTrendScore < 45 and close < MA5 and MA5 < MA10:
+if ShortTrendScore < 40 and close < MA5 and MA5 < MA10:
     maxReduceStepRatio = 0.50
 else:
     maxReduceStepRatio = 0.30
@@ -710,10 +710,10 @@ public enum TrendAlertLevel {
 判断规则：
 
 ```text
-if ShortTrendScore < 45
+if ShortTrendScore < 40
    or tags 包含 "BIAS严重偏离MA5":
     trendAlertLevel = HIGH
-else if ShortTrendScore < 60
+else if ShortTrendScore < 55
    or tags 包含 "RSI短线过热"
    or tags 包含 "接近或突破布林上轨"
    or tags 包含 "放量急涨":
@@ -756,7 +756,7 @@ else:
   "tradeDate": "2026-06-25",
   "shortTrendScore": 82.0,
   "trendLevel": "UPTREND",
-  "trendName": "短线上升趋势",
+  "trendName": "趋势偏强区",
 
   "currentPositionRatio": 0.20,
   "targetPositionRatio": 0.20,
@@ -768,7 +768,7 @@ else:
   "trendAlertLevel": "LOW",
 
   "reasons": [
-    "短线趋势评分高于75，趋势处于上升状态",
+    "趋势评分高于70，处于趋势偏强区",
     "当前仓位与目标仓位基本匹配",
     "未出现严重短线追高提示"
   ],
@@ -861,8 +861,8 @@ PAUSE                暂停
 
 关键规则：
 
-1. `ShortTrendScore < 45` 时，进入 `ONLY_SELL_OR_CLEAR`，买入侧必须归零，允许按条件单卖出或清仓候选处理。
+1. `ShortTrendScore < 40` 时，进入 `ONLY_SELL_OR_CLEAR`，买入侧必须归零，允许按条件单卖出或清仓候选处理。
 2. 强趋势且不过热时，不因浮盈或单只仓位参考值过早减仓；是否加仓由 MA5/MA10、量能和过热状态确认。
 3. 强趋势但过热时，进入 `PROFIT_PROTECTION`，停止追买或只保留小额买入，同时分批兑现。
-4. `45 <= ShortTrendScore < 60` 时，进入 `WEAK_REDUCE`，不继续扩大仓位。
+4. `40 <= ShortTrendScore < 55` 时，进入 `WEAK_REDUCE`，不继续扩大仓位。
 5. 商品/黄金/QDII 与其他 ETF 一样按趋势模式处理，不再有配置型特殊动作。

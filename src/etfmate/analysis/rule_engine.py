@@ -163,13 +163,13 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
     vol_score = 0
     if vol_ratio_1_5 is not None and vol_ratio_5_20 is not None:
         if vol_ratio_1_5 >= 1.3 and vol_ratio_5_20 >= 1.0:
-            vol_score = 15
+            vol_score = 20
         elif vol_ratio_1_5 >= 1.1:
-            vol_score = 12
+            vol_score = 16
         elif vol_ratio_1_5 >= 0.9:
-            vol_score = 8
+            vol_score = 10
         else:
-            vol_score = 4
+            vol_score = 5
 
     boll_score = 0
     if boll_position is not None:
@@ -187,31 +187,29 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
 
     bias_score = 0
     if bias5 is not None:
-        if 0 < bias5 <= 0.025:
+        if bias5 < 0:
+            bias_score = 0
+        elif bias5 <= 0.03:
             bias_score = 10
-        elif 0.025 < bias5 <= 0.04:
-            bias_score = 8
-        elif 0.04 < bias5 <= 0.06:
-            bias_score = 5
-        elif bias5 > 0.06:
-            bias_score = 2
-        elif -0.02 <= bias5 <= 0:
-            bias_score = 5
+        elif bias5 <= 0.06:
+            bias_score = 7
+        elif bias5 <= 0.10:
+            bias_score = 3
         else:
-            bias_score = 2
+            bias_score = 0
 
     rsi_score = 0
     if rsi6 is not None:
-        if 50 < rsi6 <= 75:
-            rsi_score = 20
-        elif 75 < rsi6 <= 85:
-            rsi_score = 14
-        elif rsi6 > 85:
-            rsi_score = 8
-        elif 40 <= rsi6 <= 50:
-            rsi_score = 10
+        if rsi6 < 40:
+            rsi_score = 0
+        elif rsi6 < 50:
+            rsi_score = 5
+        elif rsi6 <= 65:
+            rsi_score = 15
+        elif rsi6 <= 75:
+            rsi_score = 12
         else:
-            rsi_score = 3
+            rsi_score = 5
 
     score = round(_clamp(ma_score + boll_score + vol_score + rsi_score + bias_score, 0, 100), 2)
     level, name = _short_trend_level(score)
@@ -333,10 +331,10 @@ def _position_decision_from_short_trend(
             action = "OPEN"
             target_ratio = _apply_cash_discipline(0.15, current_ratio, portfolio, warnings)
             reasons.append("未持仓且短线趋势评分不低于85、无高风险标签，进入初始建仓区")
-        elif score >= 75 and no_high_risk and not _portfolio_blocks_add(portfolio):
+        elif score >= 70 and no_high_risk and not _portfolio_blocks_add(portfolio):
             action = "LIGHT_OPEN"
             target_ratio = _apply_cash_discipline(0.10, current_ratio, portfolio, warnings)
-            reasons.append("未持仓且短线趋势评分不低于75、无高风险标签，可轻仓建仓观察")
+            reasons.append("未持仓且趋势评分不低于70、无高风险标签，可轻仓建仓观察")
         else:
             action = "WATCH"
             target_ratio = 0.00
@@ -350,10 +348,10 @@ def _position_decision_from_short_trend(
         serious_risk = _is_serious_short_risk(score, market)
         reasons.append(f"趋势参考动作力度 {base_target:.0%}，现金纪律后参考 {target_ratio:.0%}；该字段不作为单只固定仓位上限")
 
-        if score < 45:
+        if score < 40:
             action = "EXIT_TREND_POSITION"
             target_ratio = 0.0
-            reasons.append("短线评分低于45，趋势交易账户进入只卖/清仓候选，买入侧必须归零")
+            reasons.append("趋势评分低于40，趋势交易账户进入只卖/清仓候选，买入侧必须归零")
         elif serious_risk:
             action = "EXIT_TREND_POSITION"
             target_ratio = 0.0
@@ -361,7 +359,7 @@ def _position_decision_from_short_trend(
         elif trade_mode == "WEAK_REDUCE":
             action = "REDUCE"
             target_ratio = min(target_ratio, current_ratio)
-            reasons.append("趋势评分处于震荡观察区，趋势交易账户不继续扩大仓位，优先反弹减仓")
+            reasons.append("趋势评分处于弱势震荡区，趋势交易账户不继续扩大仓位，优先反弹减仓")
         elif trade_mode == "PROFIT_PROTECTION":
             action = "HOLD_OR_REDUCE" if current_ratio <= target_ratio else "REDUCE"
             target_ratio = min(target_ratio, current_ratio)
@@ -374,8 +372,8 @@ def _position_decision_from_short_trend(
                 action = "HOLD_WAIT_ADD"
                 reasons.append("强趋势但量能或均线确认不足，先持有并等待加仓确认")
         elif trade_mode == "TREND_HOLD_GRID":
-            action = "ADD" if gap > 0.05 and _can_add_by_trend(market, trend) else "HOLD"
-            reasons.append("短线上升趋势，以趋势持有为主，只有确认条件满足才加仓")
+            action = "ADD" if gap > 0.05 and _can_add_by_trend(market, trend) else ("HOLD_WAIT_ADD" if gap > 0.05 else "HOLD")
+            reasons.append("趋势偏强，以趋势持有为主，只有确认条件满足才加仓")
         else:
             action = "HOLD" if abs(gap) < 0.05 else ("ADD" if gap > 0 else "REDUCE")
             reasons.append("震荡偏强，按小网格滚动，不因 ETF 类型或同类集中度自动降仓")
@@ -455,11 +453,11 @@ def _current_position_ratio(position: Position | None, portfolio: dict[str, Any]
 def _base_target_position(score: float, no_high_risk: bool) -> float:
     if score >= 85 and no_high_risk:
         return 0.30
-    if score >= 75 and no_high_risk:
+    if score >= 70 and no_high_risk:
         return 0.20
-    if score >= 60:
+    if score >= 55:
         return 0.10
-    if score >= 45:
+    if score >= 40:
         return 0.05
     return 0.00
 
@@ -538,11 +536,11 @@ def _trend_overheat_level(market: MarketSnapshot, trend: dict[str, Any]) -> str:
 
 def _trend_trade_mode(score: float, overheat_level: str) -> str:
     overheated = overheat_level in {"OVERHEATED", "SEVERE_OVERHEATED"}
-    if score < 45:
+    if score < 40:
         return "ONLY_SELL_OR_CLEAR"
-    if score < 60:
+    if score < 55:
         return "WEAK_REDUCE"
-    if score < 75:
+    if score < 70:
         return "PROFIT_PROTECTION" if overheated else "BALANCED_GRID"
     if score < 85:
         return "PROFIT_PROTECTION" if overheated else "TREND_HOLD_GRID"
@@ -605,7 +603,7 @@ def _is_serious_short_risk(score: float, market: MarketSnapshot) -> bool:
     close = _num_or_none(market.last_price)
     ma5 = _num_or_none(market.ma5)
     ma10 = _num_or_none(market.ma10)
-    return bool(score < 45 and close is not None and ma5 is not None and ma10 is not None and close < ma5 < ma10)
+    return bool(score < 40 and close is not None and ma5 is not None and ma10 is not None and close < ma5 < ma10)
 
 
 def _can_add_by_trend(market: MarketSnapshot, trend: dict[str, Any]) -> bool:
@@ -616,7 +614,7 @@ def _can_add_by_trend(market: MarketSnapshot, trend: dict[str, Any]) -> bool:
     vol_ratio_1_5 = _num_or_none((trend.get("indicators") or {}).get("vol_ratio_1_5")) or _num_or_none(market.vol_ratio_1_5)
     tags = set(trend.get("tags") or [])
     return bool(
-        score >= 75
+        score >= 70
         and close is not None
         and ma5 is not None
         and ma10 is not None
@@ -636,9 +634,9 @@ def _can_add_by_trend(market: MarketSnapshot, trend: dict[str, Any]) -> bool:
 
 def _position_risk_level(score: float, trend: dict[str, Any]) -> str:
     tags = set(trend.get("tags") or [])
-    if {"BIAS严重偏离MA5", "BIAS24严重正乖离"} & tags or score < 45:
+    if {"BIAS严重偏离MA5", "BIAS24严重正乖离"} & tags or score < 40:
         return "HIGH"
-    if {"RSI短线过热", "RSI短线偏热", "BIAS12明显正乖离", "接近或突破布林上轨"} & tags or score < 60:
+    if {"RSI短线过热", "RSI短线偏热", "BIAS12明显正乖离", "接近或突破布林上轨"} & tags or score < 55:
         return "MEDIUM"
     return "LOW"
 
@@ -666,7 +664,7 @@ def _action_copy(action: str, high_risk: bool, score: float) -> list[str]:
     if action == "LIGHT_OPEN":
         return ["短线趋势偏强，可轻仓建仓观察，后续继续看 MA5、量能和短线动能稳定性"]
     if action == "WATCH":
-        if high_risk and score >= 75:
+        if high_risk and score >= 70:
             return ["趋势评分较高但存在短线过热或偏离过大，不适合直接追高"]
         return ["短线趋势强度不足或交易过滤受限，暂不进入建仓区"]
     if action == "HOLD":
@@ -725,14 +723,14 @@ def _liquidity_threshold(category: str) -> float:
 
 def _short_trend_level(score: float) -> tuple[str, str]:
     if score >= 85:
-        return "STRONG_TREND", "短线强趋势"
-    if score >= 75:
-        return "UPTREND", "短线上升趋势"
-    if score >= 60:
+        return "STRONG_TREND", "强趋势健康区"
+    if score >= 70:
+        return "UPTREND", "趋势偏强区"
+    if score >= 55:
         return "WEAK_UPTREND", "震荡偏强"
-    if score >= 45:
-        return "SIDEWAYS", "震荡观察"
-    return "WEAK", "短线转弱"
+    if score >= 40:
+        return "SIDEWAYS", "弱势震荡区"
+    return "WEAK", "弱势区"
 
 
 def _num_or_none(value: Any) -> float | None:

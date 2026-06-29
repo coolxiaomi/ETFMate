@@ -386,10 +386,10 @@ def _nav_groups(etfs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     order = ["热", "温", "平", "凉", "寒"]
     meanings = {
         "热": "趋势评分≥85",
-        "温": "趋势评分75-84",
-        "平": "趋势评分60-74",
-        "凉": "趋势评分45-59",
-        "寒": "趋势评分<45",
+        "温": "趋势评分70-84",
+        "平": "趋势评分55-69",
+        "凉": "趋势评分40-54",
+        "寒": "趋势评分<40",
     }
     grouped = {key: [] for key in order}
     for etf in etfs:
@@ -1907,11 +1907,11 @@ def _trend_heat(value: Any, trend_code: Any = None) -> tuple[str, str]:
         return "平", "heat-flat"
     if score >= 85:
         return "热", "heat-hot"
-    if score >= 75:
+    if score >= 70:
         return "温", "heat-warm"
-    if score >= 60:
+    if score >= 55:
         return "平", "heat-flat"
-    if score >= 45:
+    if score >= 40:
         return "凉", "heat-cool"
     return "寒", "heat-cold"
 

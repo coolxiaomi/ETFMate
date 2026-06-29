@@ -74,10 +74,82 @@ def test_short_trend_score_uses_pure_five_factor_score_without_atr_deduct():
 
     assert trend["score"] == 100
     assert trend["level"] == "STRONG_TREND"
-    assert trend["name"] == "短线强趋势"
+    assert trend["name"] == "强趋势健康区"
     assert "atr_risk_deduct" not in trend["scores"]
     assert "positive_normalized_score" not in trend["scores"]
     assert "ATR波动放大" not in trend["tags"]
+
+
+def test_rsi_and_bias_scores_are_health_corrections_not_positive_thresholds():
+    def scored(rsi6: float, bias5_ratio: float) -> dict:
+        market = MarketSnapshot(
+            code="159999",
+            name="测试ETF",
+            last_price=1.10,
+            pct_chg=1.0,
+            volume=1_500_000,
+            amount=100_000_000,
+            ma5=1.05,
+            ma5_slope_3=0.02,
+            ma10=1.00,
+            ma20=0.95,
+            boll_position=0.80,
+            bias5_ratio=bias5_ratio,
+            rsi6=rsi6,
+            vol_ratio_1_5=1.35,
+            vol_ratio_5_20=1.1,
+            kline_days=120,
+        )
+        return rule_engine._trend_score(market)["scores"]
+
+    assert scored(60, 0.02)["rsi_score"] == 15
+    assert scored(70, 0.02)["rsi_score"] == 12
+    assert scored(80, 0.02)["rsi_score"] == 5
+    assert scored(60, 0.02)["bias_score"] == 10
+    assert scored(60, 0.05)["bias_score"] == 7
+    assert scored(60, 0.08)["bias_score"] == 3
+    assert scored(60, -0.01)["bias_score"] == 0
+    assert scored(60, 0.11)["bias_score"] == 0
+
+
+def test_short_trend_level_uses_new_health_zone_boundaries():
+    assert rule_engine._short_trend_level(85) == ("STRONG_TREND", "强趋势健康区")
+    assert rule_engine._short_trend_level(70) == ("UPTREND", "趋势偏强区")
+    assert rule_engine._short_trend_level(55) == ("WEAK_UPTREND", "震荡偏强")
+    assert rule_engine._short_trend_level(40) == ("SIDEWAYS", "弱势震荡区")
+    assert rule_engine._short_trend_level(39.99) == ("WEAK", "弱势区")
+
+
+def test_high_rsi_and_high_bias_block_watchlist_open_even_with_strong_primary_trend():
+    market = MarketSnapshot(
+        code="159999",
+        name="测试ETF",
+        last_price=1.10,
+        pct_chg=1.0,
+        volume=1_500_000,
+        amount=100_000_000,
+        ma5=1.05,
+        ma5_slope_3=0.02,
+        ma10=1.00,
+        ma20=0.95,
+        boll_position=0.80,
+        bias5_ratio=0.08,
+        rsi6=80,
+        vol_ratio_1_5=1.35,
+        vol_ratio_5_20=1.1,
+        kline_days=120,
+    )
+
+    trend = rule_engine._trend_score(market)
+    decision = rule_engine.decide_position(None, None, market, [], [market])
+
+    assert trend["score"] == 83
+    assert trend["scores"]["rsi_score"] == 5
+    assert trend["scores"]["bias_score"] == 3
+    assert {"RSI短线偏热", "BIAS严重偏离MA5"} <= set(trend["tags"])
+    assert decision["position_action"] == "WATCH"
+    assert decision["target_position_pct"] == 0
+    assert decision["risk_level"] == "HIGH"
 
 
 def test_high_risk_zero_target_should_not_be_downgraded_to_hold(monkeypatch):
@@ -85,8 +157,8 @@ def test_high_risk_zero_target_should_not_be_downgraded_to_hold(monkeypatch):
         rule_engine,
         "_trend_score",
         lambda market: {
-            "score": 40,
-            "name": "短线转弱",
+            "score": 39,
+            "name": "弱势区",
             "level": "WEAK",
             "tags": [],
             "scores": {},
@@ -110,7 +182,7 @@ def test_rule_engine_outputs_short_trend_only_without_legacy_total_scores(monkey
         "_trend_score",
         lambda market: {
             "score": 90,
-            "name": "短线强趋势",
+            "name": "强趋势健康区",
             "level": "STRONG_TREND",
             "tags": [],
             "scores": {},
@@ -167,7 +239,7 @@ def test_portfolio_limit_blocks_new_position(monkeypatch):
         "_trend_score",
         lambda market: {
             "score": 90,
-            "name": "短线强趋势",
+            "name": "强趋势健康区",
             "level": "STRONG_TREND",
             "tags": [],
             "scores": {},
@@ -192,7 +264,7 @@ def test_category_concentration_does_not_block_theme_trend_entry(monkeypatch):
         "_trend_score",
         lambda market: {
             "score": 90,
-            "name": "短线强趋势",
+            "name": "强趋势健康区",
             "level": "STRONG_TREND",
             "tags": [],
             "scores": {},
@@ -256,9 +328,9 @@ def test_strong_theme_holding_waits_for_volume_confirmation_without_category_cap
 
     decision = rule_engine.decide_position(position, None, market, existing, [market])
 
-    assert decision["trend_score"] == 89
+    assert decision["trend_score"] == 82
     assert decision["position_action"] == "HOLD_WAIT_ADD"
-    assert decision["target_position_pct"] == 30
+    assert decision["target_position_pct"] == 20
     assert decision["adjust_pct"] == 0 
 
 
@@ -334,7 +406,7 @@ def test_fallback_holding_pct_does_not_trigger_portfolio_hard_cap(monkeypatch):
         "_trend_score",
         lambda market: {
             "score": 90,
-            "name": "短线强趋势",
+            "name": "强趋势健康区",
             "level": "STRONG_TREND",
             "tags": [],
             "scores": {},
@@ -640,15 +712,15 @@ def test_profitable_strong_trend_grid_keeps_existing_sell_rise_when_bias_not_ext
         rule_decision={
             "action": "持有待加仓确认",
             "position_action": "HOLD_WAIT_ADD",
-            "trend_score": 89,
+            "trend_score": 82,
             "risk_level": "LOW",
-            "target_position_ratio": 0.30,
+            "target_position_ratio": 0.20,
         },
     )
 
     assert advice["grid_purpose"] == "加仓网格"
     assert advice["suggested_sell_rise_pct"] == 5.15
-    assert advice["suggested_sell_quantity"] == 500
+    assert advice["suggested_sell_quantity"] == 1000
     assert advice["suggested_buy_quantity"] == 1000
     assert any("卖出触发不因 ATR 公式收紧" in reason for reason in advice["reasons"])
     assert not any("胜率优先护栏触发" in reason for reason in advice["reasons"])

@@ -141,7 +141,7 @@ def advise_grid(
             suggested_buy_fall = grid.buy_fall_pct if grid else suggested_buy_fall
             suggested_sell_rise = grid.sell_rise_pct if grid else suggested_sell_rise
             reasons.append("目标仓位为 0 且仍有持仓，买入侧不再按正常数量建议；需人工停用买触发，并改按清仓/减仓策略处理")
-        elif position_action in {"EXIT_TREND_POSITION", "TREND_REVIEW", "EXIT_SHORT_TERM", "RISK_REVIEW"} or rule_action in {"退出短线仓位", "趋势复核", "风控复核"} or trend_score < 45:
+        elif position_action in {"EXIT_TREND_POSITION", "TREND_REVIEW", "EXIT_SHORT_TERM", "RISK_REVIEW"} or rule_action in {"退出短线仓位", "趋势复核", "风控复核"} or trend_score < 40:
             action = "降低买入侧"
             suggested_buy_qty = _round_qty(base_lot_qty * 0.5)
             suggested_sell_qty = base_lot_qty
@@ -153,9 +153,9 @@ def advise_grid(
             suggested_buy_qty = _round_qty((suggested_buy_qty or base_lot_qty) * 0.5)
             suggested_sell_qty = max(suggested_sell_qty or base_lot_qty, base_lot_qty)
             reasons.append("操作建议偏减仓或风险等级偏高，网格买入侧按保守仓位执行")
-        elif position_action in {"ADD", "OPEN", "LIGHT_OPEN", "HOLD_OR_ADD"} and trend_score >= 75 and position_risk_level == "LOW":
+        elif position_action in {"ADD", "OPEN", "LIGHT_OPEN", "HOLD_OR_ADD"} and trend_score >= 70 and position_risk_level == "LOW":
             if action == "维持":
-                reasons.append("操作建议偏加仓/建仓且趋势评分不低于75，网格可维持运行，但仍按总仓位、单只上限和加仓确认控制买入侧")
+                reasons.append("操作建议偏加仓/建仓且趋势评分不低于70，网格可维持运行，但仍按总仓位、单只上限和加仓确认控制买入侧")
 
     if layer_payload:
         confidence = _num_or_zero(layer_payload.get("confidence"))
@@ -204,6 +204,11 @@ def advise_grid(
         suggested_sell_qty,
     )
     reasons.append(mode_reason)
+    if trend_profit_continuation and grid and grid.sell_rise_pct and suggested_sell_rise is not None and suggested_sell_rise < grid.sell_rise_pct:
+        suggested_sell_rise = grid.sell_rise_pct
+        reason = "趋势健康且已有盈利，卖出触发不因 ATR 公式收紧，沿用现有卖出上升幅度以保留盈利空间"
+        if reason not in reasons:
+            reasons.append(reason)
     suggested_buy_qty, suggested_sell_qty, execution_checks, buy_execution_status, sell_execution_status = _apply_execution_checks(
         grid_mode,
         position,
@@ -456,9 +461,9 @@ def _grid_applicable(has_existing_grid: bool, position: Position | None, rule_ac
 def _grid_mode_from_decision(trend_score: float, overheat_level: str, position_action: str, rule_action: str) -> str:
     if position_action in {"NO_ACTION"} or rule_action in {"禁止交易"}:
         return "PAUSE"
-    if trend_score < 45 or position_action in {"EXIT_TREND_POSITION", "EXIT_SHORT_TERM"} or rule_action in {"退出短线仓位"}:
+    if trend_score < 40 or position_action in {"EXIT_TREND_POSITION", "EXIT_SHORT_TERM"} or rule_action in {"退出短线仓位"}:
         return "ONLY_SELL_OR_CLEAR"
-    if trend_score < 60 or position_action in {"REDUCE", "TREND_REVIEW", "RISK_REVIEW"} or rule_action in {"减仓", "趋势复核", "风控复核"}:
+    if trend_score < 55 or position_action in {"REDUCE", "TREND_REVIEW", "RISK_REVIEW"} or rule_action in {"减仓", "趋势复核", "风控复核"}:
         return "WEAK_REDUCE"
     if overheat_level in {"OVERHEATED", "SEVERE_OVERHEATED"}:
         return "PROFIT_PROTECTION"
@@ -466,7 +471,7 @@ def _grid_mode_from_decision(trend_score: float, overheat_level: str, position_a
         if position_action == "HOLD":
             return "TREND_HOLD_GRID"
         return "TREND_ADD"
-    if trend_score >= 75:
+    if trend_score >= 70:
         return "TREND_HOLD_GRID"
     return "BALANCED_GRID"
 
@@ -668,7 +673,7 @@ def _strategy_guardrails(
     confidence = _num_or_zero(layer_payload.get("confidence")) if layer_payload else 0
     if confidence < 60:
         guardrails.append("七层证据未完整接入，仅作复核提示")
-    if risk_level == "HIGH" or trend_score < 60 or "降低" in action or "暂停" in action:
+    if risk_level == "HIGH" or trend_score < 55 or "降低" in action or "暂停" in action:
         guardrails.append("趋势或风险未确认，宁可少赚，不用网格扩大不确定仓位")
     if position and position.pnl_pct > 0:
         if trend_profit_continuation:
@@ -786,7 +791,7 @@ def _is_profit_trend_continuation(
 ) -> bool:
     if not position or position.pnl_pct <= 0:
         return False
-    if trend_score < 75 or risk_level != "LOW":
+    if trend_score < 70 or risk_level != "LOW":
         return False
     if hard_weak or soft_weak:
         return False
