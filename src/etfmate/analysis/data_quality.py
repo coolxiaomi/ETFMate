@@ -137,7 +137,9 @@ def _validate_touker_grids(grid_payload: dict[str, Any], errors: list[str], warn
         code = _code(_pick(item, "code", "symbol", "stockCode", "securityCode", "证券代码", "代码"))
         label = code or f"第 {idx} 条网格"
         _require_code(item, errors, f"Touker 网格 {label}")
-        for field_label, names in (
+        condition_type = str(_pick(item, "condition_type", "类型") or "grid").strip().lower()
+        is_sell_only = condition_type in {"sell_only", "sell-on", "单边卖出", "分批出货"}
+        grid_fields = (
             ("名称", ("name", "证券名称", "名称")),
             ("基准价", ("base_price", "basePrice", "基准价")),
             ("现价", ("last_price", "lastPrice", "currentPrice", "现价")),
@@ -145,9 +147,20 @@ def _validate_touker_grids(grid_payload: dict[str, Any], errors: list[str], warn
             ("买入反弹", ("buy_rebound_pct", "buyReboundPct", "reboundRate", "买入反弹")),
             ("卖出上升", ("sell_rise_pct", "sellRisePct", "riseRate", "卖出上升")),
             ("卖出回落", ("sell_pullback_pct", "sellPullbackPct", "pullbackRate", "卖出回落")),
-        ):
+        )
+        sell_only_fields = (
+            ("名称", ("name", "证券名称", "名称")),
+            ("卖出上升", ("sell_rise_pct", "sellRisePct", "riseRate", "卖出上升")),
+        )
+        required_fields = sell_only_fields if is_sell_only else grid_fields
+        for field_label, names in required_fields:
             if _missing_required(item, names):
                 errors.append(f"Touker 网格 {label} 缺少 {field_label} 字段。")
+        if is_sell_only:
+            if _missing_required(item, ("order_quantity", "orderQuantity", "entrustAmount", "委托股数")):
+                warnings.append(f"Touker 单边条件单 {label} 未识别到委托卖出数量字段。")
+            if _missing_required(item, ("sell_plan_max_quantity", "sellPlanMaxQuantity", "最大卖出数量")):
+                warnings.append(f"Touker 单边条件单 {label} 未识别到最大卖出数量字段。")
         if all(_missing_required(item, names) for names in (("order_quantity", "orderQuantity", "entrustAmount", "委托股数"), ("buy_quantity", "buyQuantity", "buyAmount", "买入股数"), ("sell_quantity", "sellQuantity", "sellAmount", "卖出股数"))):
             warnings.append(f"Touker 网格 {label} 未识别到委托/买入/卖出数量字段（网格建议会使用底仓/持仓上限替代）。")
         if _missing_required(item, ("min_base_quantity", "minBaseQuantity", "最小底仓")):

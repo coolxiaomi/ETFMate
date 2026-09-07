@@ -51,6 +51,7 @@ class GridConfig:
     code: str
     name: str
     enabled: bool
+    condition_type: str = "grid"
     status: str | None = None
     base_price: float | None = None
     last_price: float | None = None

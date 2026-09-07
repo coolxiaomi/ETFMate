@@ -36,6 +36,9 @@ def advise_grid(
     grid_mode = _grid_mode_from_decision(trend_score, overheat_level, position_action, rule_action)
     layer_payload = normalize_context(layered_context)
 
+    if grid is not None and getattr(grid, "condition_type", "grid") == "sell_only":
+        return _sell_only_grid_advice(grid, market, position, reasons, layer_payload)
+
     if not _grid_applicable(has_existing_grid, position, rule_action, position_action):
         reasons.append("当前未持仓且规则未给出建仓/轻仓建仓信号，本次不生成可执行网格参数")
         return _inactive_grid_advice(market, grid, reasons, rule_decision, layer_payload)
@@ -378,6 +381,63 @@ def _execution_plan_advice(
         "layered_confidence": layer_payload.get("confidence") if layer_payload else None,
         "layered_score": layer_payload.get("total_score") if layer_payload else None,
         "rule_decision": rule_decision,
+    }
+
+
+def _sell_only_grid_advice(
+    grid: GridConfig,
+    market: MarketSnapshot,
+    position: Position | None,
+    reasons: list[str],
+    layer_payload: dict[str, Any],
+) -> dict[str, Any]:
+    plan_label = "分批减仓策略"
+    plan_summary = "Touker 已有单边卖出条件单（分批出货），不是双边网格；本次不再输出网格参数，只按卖出执行策略处理。"
+    reasons = _execution_plan_reasons(plan_summary, reasons)
+    current_qty = _current_quantity(grid)
+    return {
+        "code": grid.code,
+        "name": grid.name,
+        "action": "只保留卖出",
+        "grid_mode": "ONLY_SELL_OR_CLEAR",
+        "grid_mode_label": _grid_mode_label("ONLY_SELL_OR_CLEAR"),
+        "execution_plan_type": "REDUCE_PLAN",
+        "execution_plan_label": plan_label,
+        "execution_plan_summary": plan_summary,
+        "execution_checks": [],
+        "buy_execution_status": "DISABLED",
+        "sell_execution_status": "ACTIVE" if grid.enabled else "DISABLED",
+        "cash_constraint_status": "NO_BUY",
+        "grid_applicable": False,
+        "grid_purpose": plan_label,
+        "strategy_profile": STRATEGY_PROFILE,
+        "strategy_guardrails": ["单边卖出不是网格，只能作为减仓/清仓执行策略"],
+        "has_existing_grid": True,
+        "base_price_status": "单边条件单不评估基准价",
+        "base_price_reason": "分批出货条件单只保留卖出侧，不生成买入网格参数",
+        "current_base_price": grid.base_price,
+        "suggested_base_price": None,
+        "current_buy_fall_pct": None,
+        "suggested_buy_fall_pct": None,
+        "current_buy_rebound_pct": None,
+        "suggested_buy_rebound_pct": None,
+        "current_sell_rise_pct": grid.sell_rise_pct,
+        "suggested_sell_rise_pct": grid.sell_rise_pct,
+        "current_sell_pullback_pct": grid.sell_pullback_pct,
+        "suggested_sell_pullback_pct": grid.sell_pullback_pct,
+        "current_quantity": current_qty or None,
+        "current_buy_quantity": None,
+        "current_sell_quantity": grid.sell_quantity or None,
+        "suggested_buy_quantity": None,
+        "suggested_sell_quantity": current_qty or None,
+        "current_min_base_quantity": None,
+        "suggested_min_base_quantity": None,
+        "current_max_position_quantity": None,
+        "suggested_max_position_quantity": None,
+        "reasons": reasons,
+        "layered_confidence": layer_payload.get("confidence") if layer_payload else None,
+        "layered_score": layer_payload.get("total_score") if layer_payload else None,
+        "rule_decision": None,
     }
 
 

@@ -133,7 +133,11 @@ def run_analyze(root: Path, run_id: str) -> None:
             snapshot.name = watch.name
     snapshots_by_code = {item.code: item for item in snapshots}
     positions_by_code = {item.code: item for item in current_positions}
-    grids_by_code = {item.code: item for item in grids}
+    grids_by_code: dict[str, GridConfig] = {}
+    for item in grids:
+        existing = grids_by_code.get(item.code)
+        if existing is None or (item.condition_type == "grid" and existing.condition_type != "grid"):
+            grids_by_code[item.code] = item
     layered_contexts = {
         item.code: build_layered_context(positions_by_code.get(item.code), grids_by_code.get(item.code), item, current_positions)
         for item in snapshots
@@ -424,10 +428,12 @@ def _trade(raw: dict) -> Trade:
 
 def _grid(raw: dict) -> GridConfig:
     code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "securityCode", "证券代码", "代码")))
+    condition_type = str(_pick(raw, "condition_type", "类型", default="grid") or "grid").strip().lower()
     return GridConfig(
         code=code,
         name=str(_pick(raw, "name", "证券名称", "名称", default=code)),
         enabled=_bool(_pick(raw, "enabled", "启用", "状态", default=True)),
+        condition_type="sell_only" if condition_type in {"sell_only", "sell-on", "单边卖出", "分批出货"} else "grid",
         status=str(_pick(raw, "status", "状态", default="")),
         base_price=_maybe_num(_pick(raw, "base_price", "basePrice", "基准价", default=None)),
         last_price=_maybe_num(_pick(raw, "last_price", "lastPrice", "currentPrice", "现价", default=None)),

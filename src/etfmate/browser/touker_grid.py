@@ -37,32 +37,42 @@ def collect(root: Path, out_dir: Path) -> dict:
 
     records = _records_from_snapshot(snapshot)
     records.extend(_grid_records_from_text(str(snapshot.get("text", ""))))
-    grids = _dedupe(_extract_records(records, _looks_like_grid), "id", "conditionId", "code", "证券代码", "symbol", "name", "名称")
+    grids = _dedupe(_extract_records(records, _looks_like_grid), "condition_identity", "id", "conditionId", "code", "证券代码", "symbol", "name", "名称")
     expected = _expected_grid_count(str(snapshot.get("text", "")))
     if expected and len(grids) < expected:
         raise RuntimeError(f"Touker 网格未采齐：页面显示监控中 {expected} 条，当前只识别到 {len(grids)} 条。请确认页面已完整加载后重新运行。")
     return {"grids": grids, "snapshot": snapshot, "expected_count": expected}
 
 
-def _scroll_until_stable(session: WebAccessSession, max_steps: int = 36) -> dict[str, Any]:
-    seen_signatures: set[str] = set()
+def _scroll_until_stable(session: WebAccessSession, max_steps: int = 60) -> dict[str, Any]:
+    last_signature: str | None = None
     stable_steps = 0
     for step in range(max_steps):
         latest = _as_dict(session.eval(_SNAPSHOT_JS))
+        text = str(latest.get("text") or "")
         signature = _snapshot_signature(latest)
-        if signature in seen_signatures:
+        expected = _expected_grid_count(text)
+        code_count = len(re.findall(r"(?<!\d)(?:sh|sz)?\d{6}(?!\d)", text, flags=re.I))
+        if signature == last_signature:
             stable_steps += 1
         else:
             stable_steps = 0
-            seen_signatures.add(signature)
+            last_signature = signature
         scroll_result = _as_dict(session.eval(_SCROLL_JS))
-        if not scroll_result.get("moved") and stable_steps >= 2:
+        loading = bool(scroll_result.get("loading")) or "加载中" in text
+        if expected and code_count >= expected and stable_steps >= 1 and not loading:
+            return {
+                "scroll_steps": step + 1,
+                "scroll_complete": True,
+                "scroll_stop_reason": f"已识别监控中 {expected} 条并确认列表稳定",
+            }
+        if not scroll_result.get("moved") and stable_steps >= 2 and not loading:
             return {
                 "scroll_steps": step + 1,
                 "scroll_complete": True,
                 "scroll_stop_reason": "页面无新增内容且滚动容器已稳定",
             }
-        time.sleep(0.25)
+        time.sleep(0.5)
     return {
         "scroll_steps": max_steps,
         "scroll_complete": False,
@@ -94,9 +104,11 @@ def _grid_records_from_text(text: str) -> list[dict]:
         window = lines[start:end]
         block = "\n".join(window)
         name = _previous_name(lines, idx) or match.group(1)
+        condition_type = _condition_type_from_block(block)
         record = {
             "code": match.group(1),
             "name": name,
+            "condition_type": condition_type,
             "enabled": "休眠模式" not in block,
             "status": "休眠" if "休眠模式" in block else "监控中",
             "raw_text": block,
@@ -129,8 +141,40 @@ def _grid_records_from_text(text: str) -> list[dict]:
         max_position_match = re.search(r"最大持仓\s*(\d+)股", block)
         if max_position_match:
             record["max_position_quantity"] = max_position_match.group(1)
+        if condition_type == "sell_only":
+            price_match = re.search(r"当前价格\s*([0-9.]+)", block)
+            if price_match and "last_price" not in record:
+                record["last_price"] = price_match.group(1)
+            plan_match = re.search(r"股价高于\(含\)([0-9.]+)元后[，,]\s*每次[^，,，。]*涨跌幅达到\s*([+-]?[0-9.]+)%\s*卖出[，,]\s*最大卖出数量\s*(\d+)股", block)
+            if plan_match:
+                record["sell_plan_trigger_price"] = plan_match.group(1)
+                record["sell_rise_pct"] = plan_match.group(2)
+                record["sell_plan_max_quantity"] = plan_match.group(3)
+        record["condition_identity"] = _condition_identity(record, block)
         records.append(record)
     return records
+
+
+def _condition_type_from_block(block: str) -> str:
+    if "分批出货" in block or "股价高于" in block:
+        return "sell_only"
+    return "grid"
+
+
+def _condition_identity(record: dict, block: str) -> str:
+    code = str(record.get("code") or "")
+    ctype = str(record.get("condition_type") or "grid")
+    if ctype == "sell_only":
+        signature = "|".join(
+            str(record.get(key) or "")
+            for key in ("sell_plan_trigger_price", "sell_rise_pct", "sell_plan_max_quantity", "order_quantity")
+        )
+    else:
+        signature = "|".join(
+            str(record.get(key) or "")
+            for key in ("base_price", "buy_fall_pct", "buy_rebound_pct", "sell_rise_pct", "sell_pullback_pct", "order_quantity")
+        )
+    return f"{code}|{ctype}|{signature}"
 
 
 def _previous_name(lines: list[str], idx: int) -> str | None:
@@ -230,12 +274,36 @@ _SCROLL_JS = r"""
   const candidates = Array.from(document.querySelectorAll("*"))
     .filter((el) => el.scrollHeight > el.clientHeight + 50)
     .sort((a, b) => b.scrollHeight - a.scrollHeight);
-  for (const el of candidates.slice(0, 5)) {
-    el.scrollTop = Math.min(el.scrollHeight, el.scrollTop + Math.max(600, el.clientHeight));
+  let moved = false;
+  let movedCount = 0;
+  let maxRemaining = 0;
+  for (const el of candidates) {
+    const before = el.scrollTop;
+    const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.min(maxTop, el.scrollTop + Math.max(900, el.clientHeight || 0));
     el.dispatchEvent(new Event("scroll", { bubbles: true }));
+    if (el.scrollTop !== before) {
+      moved = true;
+      movedCount += 1;
+    }
+    maxRemaining = Math.max(maxRemaining, maxTop - el.scrollTop);
   }
-  window.scrollBy(0, 600);
-  return "ok";
+  const beforeY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+  window.scrollBy(0, 900);
+  const afterY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+  if (afterY !== beforeY) {
+    moved = true;
+    movedCount += 1;
+  }
+  const text = document.body ? document.body.innerText : "";
+  return JSON.stringify({
+    moved,
+    movedCount,
+    maxRemaining,
+    loading: text.includes("加载中"),
+    itemCount: document.querySelectorAll(".monitor-item").length,
+    codeCount: (text.match(/(?<!\d)(?:sh|sz)?\d{6}(?!\d)/gi) || []).length,
+  });
 })()
 """
 
