@@ -4,7 +4,10 @@ from etfmate.storage.models import GridConfig, MarketSnapshot, Position
 
 
 def advice(total=50, quantity=2100):
-    market = MarketSnapshot("510500", "中证500ETF", 1, 0, 1000000, 300000000, atr14_pct=2)
+    market = MarketSnapshot("510500", "中证500ETF", 1, 0, 1000000, 300000000, atr14_pct=2,
+                            ma5=.98, ma10=.97, ma20=.96, ma60=.95, ma5_slope_3=.01,
+                            bias5_ratio=.02, rsi6=60, boll_position=.7,
+                            vol_ratio_1_5=1.1, vol_ratio_5_20=1, kline_days=240)
     position = Position("510500", "中证500ETF", quantity, 1.2, 1, quantity, 0, 0)
     grid = GridConfig("510500", "中证500ETF", True, base_price=1, buy_quantity=500, sell_quantity=300)
     return advise_grid(grid, market, position, {"portfolio": {"total_position_pct": total}})

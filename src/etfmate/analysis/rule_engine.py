@@ -16,6 +16,8 @@ def decide_position(
     category = "行业主题ETF" if role["role"] == "SECTOR_DIP" else classify_etf(market.name)
     filters = _trade_filters(market, position, category)
     trend = _trend_score(market)
+    from etfmate.analysis.technical_assessment import assess_technical
+    technical = assess_technical(market)
     portfolio = _portfolio_state(position, positions, category)
     policy = assess_sell_policy(position, market)
     held = bool(position and position.quantity > 0)
@@ -25,6 +27,9 @@ def decide_position(
     blocked = set(filters["blocked_actions"])
     reasons = []
     risks = list(filters["reasons"])
+    execution_constraints = list(filters["reasons"])
+    if technical["buy_gate"] == "WAIT_CONFIRMATION":
+        blocked.add("买入")
     total = portfolio.get("total_position_pct")
     if total is not None and total >= 80:
         blocked.add("买入")
@@ -32,9 +37,10 @@ def decide_position(
     if high_risk:
         blocked.add("买入")
         risks.append("趋势或行情风险较高，暂停新增投入；不据此自动亏损清仓。")
+        execution_constraints.append(f"风险限制：趋势分{trend['score']:.0f}/100" + ("，严重过热。" if overheat == "SEVERE_OVERHEATED" else "。"))
     if role["role"] == "LEGACY_EXIT":
         action, state = "持有并做波动改善，反弹分批退出", "MANAGE_EXISTING"
-        if high_risk:
+        if high_risk or technical["buy_gate"] == "WAIT_CONFIRMATION":
             action = "暂停回补，等待反弹分批回收资金"
         if not held:
             blocked.update({"买入", "加仓", "提高网格买入侧"})
@@ -62,6 +68,7 @@ def decide_position(
         if priority and priority != market.code:
             blocked.add("买入")
             reasons.append(f"当前组内高配，暂缓新增买入；优先等待低配侧 {priority} 的回落条件，不机械卖出本标的。")
+            execution_constraints.append(f"组内高配，低吸优先复评{priority}。")
             if state == "WAIT_DIP":
                 action, state = "暂缓补入高配侧，保留持仓", "WAIT_PAIR_BALANCE"
     funding = None if role["role"] == "LEGACY_EXIT" else {
@@ -76,6 +83,8 @@ def decide_position(
         reasons.insert(0, funding["note"])
     return {
         "funding_plan": funding,
+        "technical_assessment": technical,
+        "execution_constraints": execution_constraints,
         "strategy_role": role["role"], "strategy_label": role["label"],
         "pair_target_weight": role.get("pair_weight"), "pair_progress": pair,
         "sell_policy": policy, "signal_position_action": state,
@@ -395,7 +404,8 @@ def _short_trend_level(score: float) -> tuple[str, str]:
 
 def _num_or_none(value: Any) -> float | None:
     try:
-        return float(value)
+        number = float(value)
+        return number if isfinite(number) else None
     except (TypeError, ValueError):
         return None
 

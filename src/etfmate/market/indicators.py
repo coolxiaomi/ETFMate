@@ -52,6 +52,11 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     delta = close.diff()
     out["rsi6"] = _rsi(delta, 6)
     out["rsi14"] = _rsi(delta, 14)
+    out["previous_rsi6"] = out["rsi6"].shift(1)
+    oversold = ((out["rsi6"] <= 30) & ((out["bias5_ratio"] <= -0.03) | (out["boll_position"] <= 0.2))).astype(float)
+    # Unknown history is not evidence of zero oversold days. Exclude the current sample.
+    oversold = oversold.where(out[["rsi6", "bias5_ratio", "boll_position"]].notna().all(axis=1))
+    out["recent_oversold_count5"] = oversold.shift(1).rolling(5, min_periods=5).sum()
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     out["macd_dif"] = ema12 - ema26

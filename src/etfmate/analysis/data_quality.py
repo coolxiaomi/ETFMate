@@ -237,6 +237,45 @@ def _validate_analysis(account: dict[str, Any], grid_payload: dict[str, Any], an
                 errors.append(f"规则建议 {code} 角色与当前目标不一致，需重新分析。")
             if (rule.get("sell_policy") or {}).get("rule") != "NO_LOSS_ON_LIQUIDATION":
                 errors.append(f"规则建议 {code} 缺少当前清仓规则，需重新分析。")
+            from etfmate.analysis.technical_assessment import TECHNICAL_CONTRACT
+            technical = rule.get("technical_assessment")
+            if (not isinstance(technical, dict) or technical.get("contract") != TECHNICAL_CONTRACT
+                    or not all(key in technical for key in ("status", "summary", "evidence", "conflicts", "missing_fields", "buy_condition", "sell_condition"))
+                    or technical.get("buy_gate") not in {"CONDITIONAL", "WAIT_CONFIRMATION"}
+                    or item.get("technical_assessment") != technical):
+                errors.append(f"规则建议 {code} 缺少一致的综合技术依据，需重新分析。")
+            elif technical["buy_gate"] == "WAIT_CONFIRMATION" and not set(rule.get("blocked_actions") or []) & {"买入", "全部"}:
+                errors.append(f"规则建议 {code} 技术条件未确认却未限制买入。")
+    for item in grid_advices:
+        code = item.get("code")
+        rec = next((row for row in recommendations if row.get("code") == code), {})
+        technical = rec.get("technical_assessment")
+        if not isinstance(technical, dict) or item.get("technical_assessment") != technical:
+            errors.append(f"网格建议 {code} 综合依据与规则不一致，需重新分析。")
+        elif technical.get("buy_gate") == "WAIT_CONFIRMATION" and (item.get("candidate_buy_quantity") or item.get("conditional_buyback_quantity") or item.get("grid_execution_status") != "DO_NOT_ENABLE"):
+            errors.append(f"网格建议 {code} 绕过未确认的技术买入条件。")
+        if "parameter_plan" not in item or item.get("grid_execution_status") not in {"DO_NOT_ENABLE", "PENDING_VERIFICATION"}:
+            errors.append(f"网格建议 {code} 缺少双向参数与整单状态，需重新分析。")
+            continue
+        plan = item.get("parameter_plan")
+        if plan is None:
+            if item.get("grid_execution_status") != "DO_NOT_ENABLE":
+                errors.append(f"网格建议 {code} 参数不全，必须整单停用。")
+            continue
+        if not isinstance(plan, dict):
+            errors.append(f"网格建议 {code} 双向参数格式错误。")
+            continue
+        if not isinstance(item.get("parameter_basis"), dict) or item["parameter_basis"].get("technical_status") != (technical or {}).get("status"):
+            errors.append(f"网格建议 {code} 缺少综合参数依据，需重新分析。")
+        for field in ("buy_quantity", "sell_quantity", "buy_fall_pct", "buy_rebound_pct", "sell_rise_pct", "sell_pullback_pct"):
+            value = plan.get(field)
+            valid = isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value) and value > 0
+            if field.endswith("quantity"):
+                valid = valid and value >= 100 and value % 100 == 0
+            elif field in {"buy_fall_pct", "sell_pullback_pct"}:
+                valid = valid and value < 100
+            if not valid:
+                errors.append(f"网格建议 {code} 双向参数 {field} 无效。")
     if not analysis.get("ai_review_input_path"):
         warnings.append("analysis.json 未记录 ai_review_input_path。")
 

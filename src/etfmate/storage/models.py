@@ -130,6 +130,10 @@ class MarketSnapshot:
     ma20_slope_pct: float | None = None
     kline_days: int | None = None
     data_quality: str = "ok"
+    signal_close: float | None = None
+    signal_date: str | None = None
+    previous_rsi6: float | None = None
+    recent_oversold_count5: float | None = None
 
 
 def to_dict(value: Any) -> Any:

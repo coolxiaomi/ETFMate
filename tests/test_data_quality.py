@@ -140,7 +140,7 @@ def test_analyze_and_report_without_layer_dependencies(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "advise_grid", capture_grid)
     cli.run_analyze(tmp_path, run_id)
     analysis = read_json(tmp_path / "data/raw/market" / run_id / "analysis.json")
-    assert analysis["analysis_contract"] == "etf_account_transition_v4"
+    assert analysis["analysis_contract"] == "etf_account_transition_v7"
     assert "layered_contexts" not in analysis
     assert "watchlist" not in analysis
     assert "t_grid_advices" not in analysis
@@ -210,7 +210,7 @@ def _grids() -> dict:
 
 def _analysis() -> dict:
     return {
-        "analysis_contract": "etf_account_transition_v4",
+        "analysis_contract": "etf_account_transition_v5",
         "market_snapshots": [
             _snapshot("510300"),
             _snapshot("159915"),

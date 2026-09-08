@@ -85,9 +85,10 @@ def test_report_distinguishes_quantity_reasons_and_optional_settings():
     advice = advise_grid(g, market(), p, {"high_risk": True})
     empty = advise_grid(None, market("159259"))
     html = render_html("TEST-optional-grid-limits · 无实时账户数据", recs, [advice, empty], {})
-    for label in ["建议份额", "新增买入已暂停", "现有卖出数量不足100份或已停用", "未持仓",
-                  "未设置（不设固定下限）", "未设置（不设固定上限）", "本次建议保留 500 份",
+    for label in ["建议份额", "采集单笔卖量1", "未持仓",
+                  "建议：最小仓 ≥500", "持1000", "−2.80% → +0.30%", "+2.40% → −0.20%",
                   "未提供可用金额", "当前尚未建仓"]:
         assert label in html
-    for misleading in ["待核验份", "待核验 份", "候选份额，待核验", "待核验%", "—份", "最大持仓待预算确认"]:
+    for misleading in ["待核验份", "待核验 份", "候选份额，待核验", "待核验%", "—份", "最大持仓待预算确认",
+                       "未设置", "不设固定", "不足100份或已停用", "上涨 2.40%", "下跌 2.80%"]:
         assert misleading not in html

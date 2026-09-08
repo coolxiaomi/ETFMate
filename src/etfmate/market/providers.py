@@ -228,6 +228,10 @@ def build_market_snapshot(code: str) -> MarketSnapshot:
         ma20_slope_pct=latest("ma20_slope_pct"),
         kline_days=int(latest("kline_days") or 0) if latest("kline_days") is not None else None,
         data_quality=";".join(quality),
+        signal_close=latest("close"),
+        signal_date=str(enriched["datetime"]) if enriched is not None and "datetime" in enriched else None,
+        previous_rsi6=latest("previous_rsi6"),
+        recent_oversold_count5=latest("recent_oversold_count5"),
     )
 
 

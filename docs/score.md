@@ -1,8 +1,8 @@
-> 当前账户采用角色决策（etf_account_transition_v4）。本文评分仅用于技术状态与风险提示，旧的评分→自动建仓/减仓映射不再驱动当前入口；最终动作见action.md。
+> 当前账户采用角色决策（etf_account_transition_v7）。本文评分仅用于技术状态与风险提示，旧的评分→自动建仓/减仓映射不再驱动当前入口；最终动作见action.md。
 
 # ETFMate 短线趋势评分
 
-当前 `ShortTrendScore` 描述约 1～5 个交易日的短线状态，不代表未来上涨概率，也不能独立证明最长三个月持仓的有效性。指标实现在 `src/etfmate/market/indicators.py`，评分实现在 `src/etfmate/analysis/rule_engine.py:_trend_score`。
+当前 `ShortTrendScore` 描述约 1～5 个交易日的短线状态，不代表未来上涨概率，也不能独立证明最长三个月持仓的有效性。指标实现在 `src/etfmate/market/indicators.py`，评分实现在 `src/etfmate/analysis/rule_engine.py:_trend_score`。综合技术条件独立于总分，见下文；总分低于45等原有高风险限制仍优先。
 
 ## 输入与单位
 
@@ -64,3 +64,28 @@ MA 分项要求价格、MA5/10/20、斜率全部存在，VOL 分项要求两项�
 规则结果使用 snake_case 字段：`trend_score`、`trend_level`、`trend_code`、`trend_scores`、`trend_indicators`、`trend_tags`、`trend_data_sufficient`。分项包含 `ma_score`、`vol_score`、`boll_score`、`bias_score`、`rsi_score` 和 `short_trend_score`。
 
 评分权重和阈值未经过本次收益验证；当前输出不包括估值、新闻或多层证据总分。波段策略、数据时间核验与样本外验证见 [投资方案](investment-plan.md)。
+
+## 综合技术条件（v7）
+
+`analysis/technical_assessment.py` 输出 `technical_assessment`，契约为 `multi_indicator_v2`。同时解释均线、动量与乖离、布林位置和量能，不将相关指标票数解释为上涨概率。以下阈值是可审查的启发式条件，未经过收益或触发频率验证。
+
+核心为有效正价格、MA5/10/20/60、MA5三日斜率、BIAS5、RSI6、布林位置、当日/5日及5日/20日量比和至少60日日线；缺失、非有限或核心取值非法时为 `INSUFFICIENT`，暂停买入与回补。BIAS12/24、RSI14缺失单独标记，不以零替代，也不抹掉可得核心结论。120日买入门槛保持独立。
+
+按顺序首次匹配：
+
+| 状态 | 条件 | 买入／回补 |
+| --- | --- | --- |
+| OVERSOLD_UNCONFIRMED | RSI6≤30，且BIAS5≤−3%或布林位置≤20% | 等待确认，不能把低位解释为买点 |
+| OVERHEATED | RSI6≥75、BIAS5≥6%、布林位置≥95%、BIAS12≥7%或BIAS24≥8%，任一满足 | 等待降温 |
+| OVERSOLD_RECOVERY | 前5个日线样本至少1次满足上述超卖条件；当前同源样本价格≥MA5、RSI6≥35且较前值上升；当日/5日量比≥1且5日/20日量比≥0.9 | 只保留回落后反弹的条件计划 |
+| WEAK | 价格<MA20且MA5三日斜率≤0 | 等待企稳 |
+| TREND_UP | 价格>MA5>MA10>MA20、MA5斜率>0、价格≥MA60，且满足上述两项量能条件 | 等待回落，不追涨 |
+| MIXED | 其余有效核心组合 | 保留回落观察与条件候选，分歧本身不构成硬阻断 |
+
+`TREND_UP/OVERSOLD_RECOVERY/MIXED` 的技术买入条件为 `CONDITIONAL`，其余为 `WAIT_CONFIRMATION`。技术条件不能解除趋势分<45、严重过热、流动性、120日门槛、80%总仓位、组内优先级、资金与库存限制。部分卖出仍按角色提供计划；不由超卖信号直接清仓。
+
+历史字段 `previous_rsi6/recent_oversold_count5` 在同一日线序列上计算，后者先 `shift(1)` 再滚动5条，排除当前样本和未来数据；窗口有未知指标时保持未知。`signal_close/signal_date` 标记该序列最后样本，与实时行情价格分开。缺少历史证据时不输出“超卖后修复”；旧快照可做开发预览，但不能伪造历史确认。日线样本可能处于盘中，量比包含当日，不声称收盘确认。
+
+冲突单独列出：低于MA60、量能不足、RSI6回升但RSI14<40等，不能被一个总分掩盖。
+
+v7修正：MIXED表示证据分歧，不等于危险或不能交易。仍说明尚未满足的条件，不声称已确认买点；其他硬过滤独立生效，不因为新增条件候选而输出已核验份额。

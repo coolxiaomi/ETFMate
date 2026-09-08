@@ -22,6 +22,7 @@ def build_ai_review_input(recommendations: list[dict], grid_advices: list[dict])
             "流动性约束、仓位约束和数据缺失降级必须优先。账户资金不追加也不转出；现有待退出持仓仍需持续给出盈利改善、波动和分批退出计划，不得只说等清仓。目标组合须满足价格与可用资金条件，主要承接旧仓回款，也可在价格合适时使用已有可用现金。成长40%/价值60%仅是组内最终目标，建仓期不机械卖出高配侧；不得推荐新标的。输出写入 ai_judgements.json。" + NO_LOSS_RULE
         ),
         "funding_priority_instruction": FUNDING_PRIORITY_NOTE,
+        "technical_review_instruction": "逐只复核technical_assessment中的均线、乖离、RSI、布林与量能及冲突；超卖不等于买点，缺少前序日线证据不能称企稳。区分价格条件和账户执行限制，不重复公共规则，不覆盖硬过滤。",
         "schema": {
             "review_contract": AI_REVIEW_CONTRACT,
             "items": [
@@ -89,6 +90,7 @@ def attach_ai_judgements(recommendations: list[dict], judgements: dict[str, dict
 
 
 def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> list[dict[str, Any]]:
+    from etfmate.analysis.action_plan import describe_action_plan
     grids = {str(item.get("code")): item for item in grid_advices}
     return [{
         "code": item.get("code"), "name": item.get("name"),
@@ -96,6 +98,8 @@ def _compact_payload(recommendations: list[dict], grid_advices: list[dict]) -> l
         "position": {key: item.get(key) for key in ("quantity", "market_value", "position_pct", "cost_price", "pnl_pct", "investor_note")},
         "market": {key: item.get(key) for key in ("last_price", "pct_chg", "ma20", "ma60", "atr14_pct", "rsi6", "amount_avg20", "kline_days", "data_quality")},
         "rule": item.get("rule_decision"), "grid": grids.get(str(item.get("code"))),
+        "technical_assessment": item.get("technical_assessment"),
+        "action_plan": describe_action_plan(item, grids.get(str(item.get("code")), {})),
     } for item in recommendations]
 
 

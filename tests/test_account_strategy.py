@@ -100,17 +100,22 @@ def test_sector_identity_and_asymmetric_staged_parameters():
     assert g.buy_quantity == 200  # Never mutate a real order.
 
 
-def test_missing_inventory_or_side_quantity_is_not_fabricated():
+def test_missing_inventory_has_draft_but_no_sell_or_verified_execution():
     m=market("159259")
     result=advise_grid(None,m)
-    assert result["candidate_buy_quantity"] is None
+    assert result["candidate_buy_quantity"] == 100
     assert result["candidate_sell_quantity"] is None
     assert result["grid_applicable"] is False
+    assert result["parameter_plan"]["sell_quantity"] == 100
+    assert result["grid_execution_status"] == "DO_NOT_ENABLE"
+    assert result["suggested_buy_quantity"] is None
     p=holding("159259")
     g=GridConfig(p.code,p.name,True,order_quantity=100,buy_quantity=0,sell_quantity=0)
     result=advise_grid(g,m,p)
-    assert result["candidate_buy_quantity"] is None
-    assert result["candidate_sell_quantity"] is None
+    assert result["candidate_buy_quantity"] == 400
+    assert result["candidate_sell_quantity"] == 200
+    assert g.buy_quantity == g.sell_quantity == 0
+    assert result["suggested_sell_quantity"] is None
 
 
 @pytest.mark.parametrize("atr", [None,0,float("nan"),float("inf")])
@@ -134,7 +139,7 @@ def test_report_has_account_roles_exits_and_no_retired_outputs():
         assert word in html
     assert "T网格" not in html and "自选" not in html
     assert html.index('510500</span>') < html.index('159141</span>')
-    assert "等待清仓成本核验" in html
+    assert "待核验净投入" in html
     assert account_overview(recs,{"cash":5000})["available_cash"] is None
 
 

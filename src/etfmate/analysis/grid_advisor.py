@@ -13,6 +13,8 @@ def advise_grid(
     from etfmate.analysis.account_strategy import role_for
     role = role_for(market.code)
     rule = rule_decision or {}
+    from etfmate.analysis.technical_assessment import assess_technical
+    technical = rule.get("technical_assessment") or assess_technical(market)
     held = position.quantity if position else 0
     held = held if isfinite(held) and held > 0 else 0
     advice = {
@@ -27,6 +29,7 @@ def advise_grid(
         "candidate_sell_quantity": None, "minimum_sell_price": None,
         "execution_checks": [], "reasons": [], "strategy_guardrails": [],
         "current_base_price": grid.base_price if grid else None,
+        "current_enabled": grid.enabled if grid else None,
         "current_buy_quantity": grid.buy_quantity if grid else None,
         "current_sell_quantity": grid.sell_quantity if grid else None,
         "current_min_base_quantity": grid.min_base_quantity if grid else None,
@@ -36,15 +39,19 @@ def advise_grid(
         "buy_quantity_note": "缺少有效行情，暂不计算",
         "sell_quantity_note": "缺少有效行情，暂不计算",
         "buyback_quantity_note": "暂不安排回补",
+        "parameter_plan": None, "grid_execution_status": "DO_NOT_ENABLE",
+        "technical_assessment": technical, "specific_notes": [],
+        "grid_execution_note": "暂不启用整单：缺少有效参数",
     }
     legacy = role["role"] == "LEGACY_EXIT"
     if legacy and not held:
         policy = assess_sell_policy(position, market)
-        advice.update(action="停用买入侧，等待清仓核验", grid_mode="LEGACY_EXIT",
+        advice.update(action="停用旧网格", grid_mode="LEGACY_EXIT",
                       grid_mode_label="过渡退出", buy_execution_status="DISABLED",
                       sell_execution_status="LIQUIDATION_REVIEW", sell_policy=policy,
                       minimum_sell_price=policy["minimum_sell_price"],
                       buy_quantity_note="旧网格停止新增买入", sell_quantity_note="未持仓",
+                      grid_execution_note="停用整单：旧标的已无持仓",
                       reasons=["旧持仓不再补仓摊低成本；旧网格不能自动清空库存。", policy["reason"]])
         return advice
     atr = market.atr14_pct
@@ -60,6 +67,29 @@ def advise_grid(
     rise = round(max(1.5, atr * (0.9 if building else 1.2)), 2)
     rebound = round(min(0.8, max(0.15, atr * 0.15)), 2)
     pullback = round(min(0.6, max(0.1, atr * 0.10)), 2)
+    original = {"buy_fall_pct": fall, "buy_rebound_pct": rebound,
+                "sell_rise_pct": rise, "sell_pullback_pct": pullback}
+    state = technical["status"]
+    if state in {"WEAK", "OVERSOLD_UNCONFIRMED", "OVERHEATED"}:
+        fall = round(fall * 1.25, 2)
+        rebound = round(min(0.8, rebound * 1.5), 2)
+        rise = round(max(1.5, rise * 0.85), 2)
+        adjustment = "买入间距×1.25、反弹确认×1.5，卖出间距×0.85；仅保留复评草案。"
+    elif state == "OVERSOLD_RECOVERY":
+        rebound = round(min(0.8, rebound * 1.25), 2)
+        adjustment = "初步修复：反弹确认×1.25，买入间距不缩窄。"
+    else:
+        adjustment = "沿用角色起始间距；量价状态决定是否等待确认。"
+    basis_label = {"WEAK": "弱势修正", "OVERSOLD_UNCONFIRMED": "超卖未企稳修正",
+                   "OVERHEATED": "过热修正", "OVERSOLD_RECOVERY": "初步修复，提高反弹确认"}
+    advice["parameter_basis"] = {
+        "atr14_pct": atr, "original": original, "technical_status": state,
+        "adjustment": adjustment,
+        "note": f"ATR14 {atr:.2f}% · {basis_label.get(state, '沿用角色起始间距')}",
+    }
+    if fall >= 100:
+        advice.update(action="等待波动数据复核", reasons=["综合修正后下跌间距达到100%，不生成无效参数。"])
+        return advice
     base = grid.base_price if grid and grid.base_price and isfinite(grid.base_price) and grid.base_price > 0 else market.last_price
     if legacy:
         base = market.last_price  # A new staged-exit proposal, not a change to the live grid.
@@ -71,20 +101,24 @@ def advise_grid(
     if grid and grid.min_base_quantity is not None and isfinite(grid.min_base_quantity):
         reserve = max(reserve, ceil(grid.min_base_quantity / 100) * 100)
     raw_sell = (grid.sell_quantity if grid and grid.sell_quantity is not None else grid.order_quantity if grid else None)
-    if legacy and raw_sell is None:
-        raw_sell = held * 0.25  # Staged-exit candidate derived from actual inventory.
-    sell = int(min(raw_sell, max(0, held - reserve)) // 100) * 100 if raw_sell is not None and isfinite(raw_sell) and raw_sell > 0 else 0
+    valid_sell = raw_sell is not None and isfinite(raw_sell) and raw_sell >= 100 and raw_sell % 100 == 0
+    sell_draft = int(raw_sell) if valid_sell else max(100, int(held * 0.25 // 100) * 100)
+    sell = int(min(sell_draft, max(0, held - reserve)) // 100) * 100
     raw_buy = (grid.buy_quantity if grid and grid.buy_quantity is not None else grid.order_quantity if grid else None)
-    candidate_buy = int(raw_buy // 100) * 100 if raw_buy is not None and isfinite(raw_buy) and raw_buy > 0 else None
+    valid_buy = raw_buy is not None and isfinite(raw_buy) and raw_buy >= 100 and raw_buy % 100 == 0
+    buy_draft = int(raw_buy) if valid_buy else 100
+    candidate_buy = buy_draft
     if building and sell > 0:
-        candidate_buy = max(candidate_buy or 0, sell * 2)
+        candidate_buy = max(candidate_buy, sell * 2)
+    buy_draft = candidate_buy
     # An omitted optional ceiling adds no fixed limit. Respect an explicit zero.
     ceiling = grid.max_position_quantity if grid else None
     if ceiling is not None and isfinite(ceiling) and candidate_buy is not None:
         candidate_buy = min(candidate_buy, int(max(0, ceiling - held) // 100) * 100) or None
+    buy_draft = candidate_buy or buy_draft
     blocked = set(rule.get("blocked_actions") or [])
     total = (rule.get("portfolio") or {}).get("total_position_pct")
-    buy_blocked = bool(blocked & {"全部", "买入", "加仓"}) or rule.get("high_risk") or rule.get("risk_level") == "HIGH" or (total is not None and total >= 80)
+    buy_blocked = bool(blocked & {"全部", "买入", "加仓"}) or rule.get("high_risk") or rule.get("risk_level") == "HIGH" or (total is not None and total >= 80) or technical["buy_gate"] == "WAIT_CONFIRMATION"
     policy = assess_sell_policy(position, market, sell_price=base * (1 + rise / 100) * (1 - pullback / 100),
                                 sell_quantity=sell if sell else None)
     advice.update(
@@ -101,16 +135,16 @@ def advise_grid(
         first_buy_reference_price=round(base * (1 - fall / 100) * (1 + rebound / 100), 4),
         first_sell_reference_price=round(base * (1 + rise / 100) * (1 - pullback / 100), 4),
         quantity_plan="建仓期建议买入份额大于卖出份额，候选按至少2:1估算；资金不足时减少卖出或等待，不预支资金。" if building else "买卖份额分别配置；保留至少一半现有库存作为候选底仓。",
-        buy_quantity_note=("新增买入已暂停" if buy_blocked else
+        buy_quantity_note=("新增投入受限，整单暂不启用" if buy_blocked else
                            "已达最大持仓或剩余额度不足100份" if ceiling is not None and ceiling - held < 100 else
-                           "现有买入数量不足100份或已停用" if raw_buy is not None else "未设置单笔买入数量"),
+                           "按合法单笔数量拟定"),
         sell_quantity_note=("未持仓" if not held else "保留建议底仓后不足100份" if held - reserve < 100 else
-                            "现有卖出数量不足100份或已停用" if raw_sell is not None else "未设置单笔卖出数量"),
+                            "按持仓与保留量拟定"),
         reasons=["参数按本次ATR生成，随行情重新计算；属于起始建议，不保证收益或触发频率。"],
         strategy_guardrails=[
-            "未设置底仓上下限表示不设固定限制；建议保留量不是平台已配置值。执行时检查可卖量与累计占用，循环卖出仍须防止未经核验清仓。",
+            "建议保留量不是平台已配置值。启用前核实库存保护；无法保护时整单停用，部分卖出另行安排。",
             "部分卖出允许低于成本；每次成交更新净投入，最后一笔须单独满足清仓回本价。",
-            "买入建议沿用现有数量或按建仓比例估算；执行前按实际可用现金、预算和累计委托占用调整。",
+            "数量草案沿用合法单笔量，缺失或异常时按持仓或100份起拟；不代表已核验资金或可卖量。",
         ],
         execution_checks=[
             {"check": "cash_and_reservations", "status": "PENDING", "message": "全账户预算与网格累计占用未核验"},
@@ -120,6 +154,7 @@ def advise_grid(
     )
     if stale_base:
         advice["reasons"].append("现有基准价偏离当前行情较大，等待复核；不能照抄或自动重置。")
+        advice["specific_notes"].append("现有基准价偏离行情较大，需复核后调整。")
     if buy_blocked:
         advice["reasons"].append("风险或组合仓位限制已阻断新增买入。")
     if legacy:
@@ -138,4 +173,52 @@ def advise_grid(
         )
         advice["reasons"].insert(0, "即使清仓成本暂未核实，仍提供反弹价格、部分卖出数量和条件回补方案。此处基准采用当前价拟定新计划，实际网格需另行检查后调整。")
         advice["strategy_guardrails"].append("回补必须在本笔卖出真实成交后重算：买入量不超过实际已卖量，金额不超过划给回补的可用回款；同一笔钱不能同时承诺给回补和目标建仓。")
+    blockers = []
+    if total is not None and total >= 80:
+        blockers.append(f"总仓{total:.2f}% ≥ 80%")
+    if rule.get("high_risk") or rule.get("risk_level") == "HIGH":
+        blockers.append("高风险")
+    if buy_blocked and not blockers:
+        blockers.append("新增投入受限")
+    if technical["buy_gate"] == "WAIT_CONFIRMATION":
+        blockers.append("量价条件未确认")
+    if not held:
+        blockers.append("未持仓，卖出库存不足")
+    elif sell < 100:
+        blockers.append("保留底仓后可卖不足100")
+    if ceiling is not None and ceiling - held < 100 and not legacy:
+        blockers.append("最大仓余量不足100")
+    if stale_base:
+        blockers.append("基准价偏离，需复核")
+    if legacy:
+        blockers.append("先卖后回补，需逐笔核实回款")
+    if grid and not grid.enabled:
+        blockers.append("当前整单已停用")
+    if (raw_buy is not None and not valid_buy) or (raw_sell is not None and not valid_sell):
+        blockers.append("原单数量异常，需核对")
+    if grid and grid.min_base_quantity is not None and ceiling is not None and reserve > ceiling:
+        blockers.append("建议底仓高于当前最大仓")
+    # A complete settings draft is separate from action candidates and verified execution.
+    # Touker cannot disable either side by entering zero or by a side-only pause.
+    plan_buy = (advice.get("conditional_buyback_quantity") if legacy else advice["candidate_buy_quantity"])
+    advice["parameter_plan"] = {
+        "buy_quantity": plan_buy or (100 if legacy else buy_draft),
+        "sell_quantity": sell or sell_draft,
+        "buy_fall_pct": fall, "buy_rebound_pct": rebound,
+        "sell_rise_pct": rise, "sell_pullback_pct": pullback,
+        "buy_quantity_source": ("成交后回补比例" if plan_buy else "最小100份起拟，当前无回补动作") if legacy else
+                               "现有单笔量/建仓比例" if valid_buy else "最小100份起拟/建仓比例",
+        "sell_quantity_source": (("现有单笔量，建仓后复评" if valid_sell else "建仓后网格草案，按100份起拟") if not held else
+                                 "现有单笔量，受底仓约束" if valid_sell else "持仓约1/4取整，最低100份起拟"),
+    }
+    advice["grid_execution_status"] = "DO_NOT_ENABLE" if blockers else "PENDING_VERIFICATION"
+    advice["grid_execution_note"] = (
+        "暂不启用整单：" + "；".join(blockers) if blockers else
+        "启用前：核实可用资金、可卖量、累计占用及底仓保护"
+    )
+    advice["strategy_guardrails"].append("平台双向联动；任一侧不满足执行条件时整单停用。部分卖出计划须另行执行，不能用0份或单侧暂停实现。")
+    for side, raw, valid in (("买", raw_buy, valid_buy), ("卖", raw_sell, valid_sell)):
+        if raw is not None and not valid:
+            advice["reasons"].append(f"采集单笔{side}量{raw:g}与平台100份起、100份整数倍约束不符；需核对原单，不代表持仓不足或已停用。")
+            advice["specific_notes"].append(f"采集单笔{side}量{raw:g}不符合100份整数倍约束，需核对原单。")
     return advice

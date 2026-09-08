@@ -9,6 +9,7 @@ def render_html(
     trade_review: dict, data_completeness: dict | None = None,
 ) -> str:
     from etfmate.analysis.account_strategy import account_overview, TARGETS
+    from etfmate.analysis.action_plan import describe_action_plan
     data = data_completeness or {}
     overview = account_overview(recommendations, data.get("account_summary"))
     grids = {item["code"]: item for item in grid_advices}
@@ -19,6 +20,7 @@ def render_html(
     return _template_env().get_template("account_report.html").render(
         date=date, overview=overview, targets=targets, exits=exits, grids=grids,
         data=data, trade_review=trade_review,
+        action_plans={r["code"]: describe_action_plan(r, grids.get(r["code"], {})) for r in recommendations},
     )
 
 

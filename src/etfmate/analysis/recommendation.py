@@ -32,6 +32,7 @@ def recommend(
         "current_status": _status(position, grid, market),
         "ma_status": _ma_status(market), "rule_decision": rule, "sell_policy": rule["sell_policy"],
         "reasons": rule["reasons"], "risks": rule["risks"],
+        "technical_assessment": rule["technical_assessment"],
         **{key: rule.get(key) for key in ("account_mode", "position_action", "execution_mode",
             "target_position_pct", "current_position_ratio", "target_position_ratio", "new_position_ratio",
             "adjust_ratio", "current_position_pct", "new_position_pct", "adjust_pct")},
