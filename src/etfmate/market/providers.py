@@ -63,7 +63,7 @@ def tencent_quote(codes: list[str]) -> dict[str, dict]:
 
 
 def baidu_daily_kline(code: str, start_time: str = "") -> pd.DataFrame:
-    """百度股市通日 K 线。用于 mootdx TCP 不可用时的 HTTP 降级。"""
+    """百度股市通日 K 线，提供价格、成交量和成交额。"""
     code = normalize_etf_code(code)
     url = "https://finance.pae.baidu.com/selfselect/getstockquotation"
     params = {
@@ -123,7 +123,7 @@ def tencent_daily_kline(code: str, count: int = 260) -> pd.DataFrame:
     df = pd.DataFrame(normalized_rows, columns=["datetime", "open", "close", "high", "low", "volume"])
     for column in ("open", "close", "high", "low", "volume"):
         df[column] = pd.to_numeric(df[column], errors="coerce")
-    df["amount"] = 0.0
+    df["amount"] = float("nan")
     return df.dropna(subset=["open", "close", "high", "low", "volume"])
 
 
@@ -151,11 +151,14 @@ def build_market_snapshot(code: str) -> MarketSnapshot:
     quality = ["quote:tencent" if quote else "quote:missing"]
     enriched = None
     kline_errors: list[str] = []
-    for source, fetcher in (("tencent", tencent_daily_kline), ("baidu", baidu_daily_kline)):
+    for source, fetcher in (("baidu", baidu_daily_kline), ("tencent", tencent_daily_kline)):
         try:
             kline = fetcher(code)
-            quality.append(f"kline:{source}")
+            amounts = pd.to_numeric(kline["amount"], errors="coerce").tail(20)
+            if amounts.empty or amounts.isna().any() or not amounts.map(lambda value: 0 <= value < float("inf")).all() or not amounts.gt(0).any():
+                raise ValueError("日线成交额缺失或无效，不能用零占位判断流动性")
             enriched = enrich_indicators(kline).tail(1).iloc[0]
+            quality.append(f"kline:{source}")
             break
         except Exception as exc:
             kline_errors.append(f"{source}:{type(exc).__name__}")

@@ -9,11 +9,7 @@ description = "本地 ETF 持仓与网格交易辅助分析工具"
 requires-python = ">=3.10"
 dependencies = [
   "pandas",
-  "stockstats",
   "requests",
-  "mootdx",
-  "pydantic",
-  "rich",
   "jinja2",
 ]
 

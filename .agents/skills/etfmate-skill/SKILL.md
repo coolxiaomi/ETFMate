@@ -1,99 +1,85 @@
 ---
 name: etfmate-skill
-description: 本地 ETF 实时持仓、Touker 网格与 T网格交易辅助分析 skill。用户说“分析ETF”“分析 ETF”“跑ETF”“跑 ETFMate”“生成 ETFMate 报告”，或只指定 etfmate-skill/ETFMate 后加“分析”“干活”“执行”“跑”“开始”，甚至只指定本 skill 而没有其它动作时，默认运行完整 ETFMate 实时流程：先用 $web-access 连接用户已登录的 Chrome，实时采集同花顺投资账本和 Touker 网格，再结合 $a-stock-data 七层数据、行情指标、持仓备注、Touker 网格参数和自选池 T网格分析生成中文 HTML 实时分析报告，最后使用 $shareone 发布报告并返回链接。触发场景还包括 ETF 实时分析、同花顺投资账本采集、Touker 网格设置、ETF 持仓建议、网格调参建议、T网格/震荡网格分析、web-access 登录态页面采集、多层证据分析、本地 CLI 工具开发。
+description: ETFMate 固定资金账户的实时持仓与网格辅助分析。分析ETF、跑ETFMate、生成报告或仅指定本skill时，默认通过web-access采集已登录的同花顺与Touker，优先管理现有持仓，再按价格与可用资金逐步承接低频波动、赛道和成长价值目标，生成中文HTML，并通过shareone分享。也用于持仓建议、非对称网格调参、账户报告及本地CLI修改；明确讨论或修改规则时不自动采集发布。
 ---
 
 # ETFMate Skill
 
-## 快捷触发与默认动作
+## 入口与任务范围
 
-- 用户说“分析ETF”“分析 ETF”“跑ETF”“跑 ETFMate”“生成 ETFMate 报告”“更新 ETF 持仓分析”等短口令时，必须使用本 skill，不要退回通用金融分析。
-- 用户说“分析T网格”“T网格分析”“震荡网格”“找适合做T的ETF”等口令时，也使用本 skill；它是 ETFMate 的现有功能扩展，不是新项目，采集阶段仍走统一 ETFMate 采集流程。
-- 用户明确写出 `etfmate-skill`、`ETFMate`、`$etfmate-skill` 或类似指定方式时，即使只追加“分析”“干活”“执行”“跑”“开始”，或没有追加任何动作，也按“完整实时分析并发布报告”处理。
-- 默认完整流程是：用 `$web-access` 采集同花顺投资账本和 Touker 网格 -> 构建行情指标、七层证据和自选池 T网格分析 -> 运行本地规则引擎 -> 宿主 AI 复核 `ai_review_input.json` 并写回 `ai_judgements.json` -> 生成中文 HTML 报告 -> 使用 `$shareone` 发布报告 -> 返回本地报告路径和 ShareOne 链接。
-- 如果用户明确说“不发布”“只生成本地报告”“不要 ShareOne”，则只生成本地 HTML 报告，不调用 `$shareone`。
+- “分析ETF”“跑ETF”“跑ETFMate”“生成ETFMate报告”或仅指定本 skill，默认执行完整实时流程并发布。明确“不发布／只生成本地报告”时不调用 ShareOne。
+- 讨论标的、确认原则、修改 skill 或代码属于讨论/开发任务，不自动运行账户采集或发布。
+- 用户所说“做T”指隔日或一周触发数次的低频赚波动，不理解为高频日内交易，也不承诺实际触发次数。
+- 不再采集同花顺自选池，不运行原独立 T网格候选筛选、评分、回测估算；不能因旧口令、历史缓存或旧报告恢复它。
+- 只分析当前真实持仓、现有真实网格标的及下表4只指定目标。历史交易仅用于复盘，不能扩展研究范围。
 
-## 文档权威顺序
+## 已确认的账户准则
 
-- 本文件只定义 skill 的入口路由、强制运行流程、硬阻断规则和参考文档索引。
-- 产品规则、评分、动作、网格、T网格、报告和数据质量闸门以仓库 `docs/` 为准：`docs/score.md`、`docs/action.md`、`docs/rule.md`、`docs/grid.md`、`docs/t-grid.md`、`docs/report.md`、`docs/data-quality.md`。
-- Skill 运行期检查清单以 `references/etfmate-domain-rules.md` 为准；它不复制完整业务规则，只列出正式运行必须检查的采集、阻断、文件产物和验收项。
-- 如果规则或报告行为变化，必须同步更新对应 `docs/*.md`；只有入口行为、默认发布策略、采集硬阻断或 skill 资源路径变化时，才更新本文件。
+| 代码 | 角色 | 操作方向 |
+| --- | --- | --- |
+| 510500 | 宽基赚波动 | 保留底仓，低频分批买卖，支持买卖幅度和数量分别配置 |
+| 159141 | 赛道低吸 | 一个赛道一只ETF，等待回落逐步买入，不一次性建满 |
+| 159259 | 成长 | 与价值组成一组，最终组内市值40% |
+| 159263 | 价值 | 与成长组成一组，最终组内市值60% |
 
-## 强制运行流程
+- 159781 不作为最终波动配置标的；已有持仓继续逐只分析持有、波动改善、反弹分批卖出和盈利退出。其他现有非目标持仓同样处理，不能只输出“等待清仓”。
+- 成长／价值目前处于逐步建仓期：跌多买入，也可涨少部分卖出；低配侧满足低吸条件时优先补入，不机械卖出高配侧凑比例。暂时达到40/60不代表完成建仓；维护期需另有预算或用户确认。
+- 最终目标4只，不超过5只；过渡期允许持仓更多，不为数量达标亏损清仓。
+- 允许浮亏，允许低于成本的部分卖出；最终清仓须收回本轮净投入本金，等于回本线允许清仓。费用继续按既有约定忽略。
+- 清仓核验计算本轮累计买入减已成交卖出回款及现金分红；页面成本未确认是否包含历史卖出盈亏时，只能作参考。部分卖出后重算剩余净投入和清仓回本价，防止分批卖出或连续网格清空持仓绕过约束。
+- 账户资金不追加也不转出，全部在现有账户内周转；账户净值会随盈亏变化。未成交卖出不能提前当成买入资金；成交后仍须核实回款可用。
+- 各角色占全账户预算、现金缓冲、维护期再平衡阈值尚未确认，不能擅自生成个性化精确仓位或宣称数量可直接执行。
+- 旧三个月期限和30%单标的回撤的适用范围/计算基准未明确，不自动生成强制亏损清仓规则。
 
-每次正式运行 ETFMate 必须按以下顺序执行，不能跳步：
+## 过渡期优先级
 
-1. 加载 `$web-access` skill，并按其前置检查启动或确认 CDP Proxy；必须向用户展示 web-access 的账号风险提示。
-2. 使用 web-access 的 CDP Proxy 操作用户 Chrome。优先创建后台 tab，不主动改动用户已有 tab；任务结束关闭自己创建的 tab。
-3. 实时采集同花顺投资账本和 Touker 网格，此时仍不要分析。
-4. 任一页面出现登录、验证码、风控、协议确认、关键数据未加载或滚动列表未采齐，立即停止并提示用户在 Chrome 中手动处理。
-5. 只有同花顺持仓/交易/自选 ETF 池和 Touker 网格都采集成功，才继续行情指标、七层证据、规则建议和自选池 T网格分析生成。
-6. `collect` 后必须通过 `data_quality.json` 质量闸门；`analyze` 和 `report` 前也必须重新执行质量闸门，失败时停止，不生成最终建议、HTML 报告或 ShareOne 发布产物。
-7. `analyze` 生成 `data/raw/market/RUN_ID/ai_review_input.json` 后，宿主 AI 必须读取该文件，用当前会话模型生成 `ai_judgements.json`，再生成 HTML 报告。
-8. 报告完整生成后，若本次来自快捷触发或用户没有明确禁止发布，必须加载 `$shareone` skill 发布生成的 HTML 报告。
+先逐只管理当前持仓，给出持有依据、反弹卖出价、分批份额、条件回补及最终退出路径，再说明哪些回款可以承接目标组合。现有待退出持仓不能降级成“只等回本”的清单。
+
+6/4是最终组内比例。现有资金优先支持待退出ETF的回本管理；先安排旧仓合理回补和周转预留，目标组合只使用之后确认剩余的可用资金。无需等全部旧仓清完，但不能为新目标挤占旧仓资金，也不能为凑比例催促买入。此优先级不代表无条件补仓或保证回本。5只限制针对最终状态，不能用过渡期持仓超5只一刀切阻断目标机会。
+
+回补不是默认追加旧仓：可建议先卖后买、回补份额小于或等于实际已卖份额的条件方案；成交回款需在旧仓回补和目标建仓之间统一分配。清仓成本未核验只阻断最终清仓，不抹掉其他操作建议。
+
+## 正式运行流程
+
+1. 读取本文件、`references/etfmate-domain-rules.md` 和对应 `docs/`。加载 `$web-access`，按其规则确认 Proxy 和真实 Chrome 登录态。
+2. 使用 web-access 采集同花顺持仓、资产、备注、清仓及交易记录，采集 Touker 全部条件单并筛出真实网格。滚动到底，累积每屏证据；不访问原自选池页面。
+3. 遇到登录、验证码、风控、协议确认或核心数据漏采时停止，说明具体阻断原因。不得使用样例、手工数据或首屏快照生成正式报告。
+4. 通过采集质量闸门后运行分析。行情适配器只获取当前研究范围；缺数据则降级或阻断，不编造指标。
+5. 宿主 AI 读取本次 `ai_review_input.json`，按账户角色和清仓约束复核，写回 `review_contract=etf_account_transition_v4`、`items`。旧分析及旧AI复核必须重新生成。
+6. 通过分析与报告质量闸门，生成 `账户总览 → 现有持仓管理 → 目标组合与资金承接` 中文 HTML。将依据和技术指标折叠，首页先给账户方向和三项待办。
+7. 完整实时分析默认加载 `$shareone` 发布；明确不发布时返回本地报告。开发测试产物不得当作真实报告发布。
 
 目标页面：
 
-- 同花顺投资账本持仓/清仓/交易：`https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO`
-- 同花顺投资账本自选 ETF 池：`https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/ISUeEwK`
-- Touker 网格：`https://m.touker.com/fd/conditions/monitoring`
+- 同花顺持仓/清仓/交易：`https://tzzb.10jqka.com.cn/pc/index.html#/myAccount/a/c60MoMO`
+- Touker：`https://m.touker.com/fd/conditions/monitoring`
 
-## 硬阻断规则
+正式采集使用 `$web-access`；不通过另一套浏览器或HTTP抓取替代真实登录态。优先使用自己创建的后台标签，结束后关闭，不改变用户原有标签。工具只生成建议，不自动下单或修改条件单。
 
-- 正式分析必须使用真实同花顺和 Touker 登录态数据，不得用样例数据、手工替代数据、搜索结果、WebFetch、curl 或只采首屏的滚动列表生成最终建议。
-- 所有联网、登录态页面读取、网页交互和动态渲染页面采集都必须通过 `$web-access` skill 执行，不使用旧的直连浏览器自动化实现。
-- 同花顺投资账本必须覆盖当前持仓、清仓、交易记录、持仓备注/看法列和自选 ETF 池；所有滚动加载列表必须滚动到底并累积每屏证据。
-- Touker 必须覆盖监控中网格并按页面 `监控中(N)` 校验采集数量；采不齐时停止。
-- 任一核心源未登录、未加载、未采齐或证据完整性不足时，必须停止；不得生成最终建议，也不得发布 ShareOne。
-- `data/raw/market/RUN_ID/data_quality.json` 的 `status` 必须为 `PASS` 才能进入 AI 复核、报告和发布；`FAIL` 时只能返回阻断原因和排查路径。
-- 工具只做分析与辅助决策，不自动下单，不绕过验证码、短信、人脸、设备验证或平台风控。
+## 参数和执行边界
 
-## 规则与报告索引
+- 非对称参数分别输出买入下跌、买入反弹、卖出上涨、卖出回落、买入数量和卖出数量，不再强制两侧确认幅度相等。
+- 用当前ATR生成起始候选，明确参考基准及首笔价格示例。候选数量与已核验执行数量区分；缺预算、可用资金或可卖量时执行数量留空，不能填0份假装已配置。
+- 清仓成本和库存必须单独核验，但缺少清仓成本证明只限制最终清仓，不停止现有持仓的部分卖出、波动与持有建议。当前采集器不证明完整持仓周期净投入，不把普通成本价自动标为已核验清仓回本价。
+- 连续卖出须保留底仓；平台无法保证最低库存时暂停循环卖出。临近清仓时转为单独核验的退出计划。
+- 80%是原有组合保护上限，不是新确认的最优比例；预算不明时仍不输出可直接执行的新增买入。
 
-运行或修改 ETFMate 前，按任务读取对应文档：
+## 文档与命令
 
-- `references/etfmate-domain-rules.md`：skill 运行检查清单、阻断条件、文件产物和 P0 验收项。
-- `docs/skill-contract.md`：skill 入口契约与仓库规则文档的权威边界。
-- `docs/score.md`：`ShortTrendScore` 趋势评分算法。
-- `docs/action.md`：趋势评分到账户模式、趋势交易模式、仓位动作和禁用交易指令文案。
-- `docs/rule.md`：ETF 池过滤、交易硬过滤、规则引擎数据流和 AI 复核边界。
-- `docs/grid.md`：Touker 网格模式、执行数量校验、基准价、买入反弹/卖出回落、风险联动和回归测试。
-- `docs/t-grid.md`：震荡网格（T网格）候选筛选、参数、生命周期、回测估算和报告隔离契约。
-- `docs/report.md`：HTML 报告展示排序、风险页聚合和展示契约。
-- `docs/data-quality.md`：采集字段、滚动完整性、universe 对账和 analyze/report 前硬阻断。
-
-## CLI 与产物
-
-快速规则版运行：
+产品规则以 `docs/investment-plan.md`、`docs/sell-policy.md`、`docs/rule.md`、`docs/action.md`、`docs/grid.md`、`docs/report.md`、`docs/data-quality.md` 为准。`docs/score.md` 只解释指标评分，不独立决定角色或分配资金；`docs/t-grid.md` 为停用说明。
 
 ```bash
-etfmate run
+etfmate collect --run-id RUN_ID
+etfmate analyze --run-id RUN_ID
+# 当前宿主AI读取 ai_review_input.json 并写回 ai_judgements.json
+etfmate ai-attach --run-id RUN_ID --input data/raw/market/RUN_ID/ai_judgements.json
+etfmate report --run-id RUN_ID
 ```
 
-带 AI 综合研判的推荐流程：
+`etfmate run` 不等待宿主AI回写；正式发布前仍须完成复核。旧版本产物不能只重渲染；`analyze` 会重新获取行情，并非历史回测。正式新快照用新RUN_ID。
 
-```bash
-etfmate collect --run-id 20260618-153000
-etfmate analyze --run-id 20260618-153000
-# 宿主 AI 读取 data/raw/market/20260618-153000/ai_review_input.json
-# 宿主 AI 生成 data/raw/market/20260618-153000/ai_judgements.json
-etfmate report --run-id 20260618-153000
-```
+修改规则、入口或报告时同步文档及聚焦测试。`scripts/health_check.py` 仅检查依赖与Proxy可见性；不以通过检查代表真实账户已采齐。
 
-回放或调试某次实时快照：
+## 可选底仓设置与报告文案
 
-```bash
-etfmate collect --run-id 20260618-153000
-etfmate analyze --run-id 20260618-153000
-etfmate ai-attach --run-id 20260618-153000 --input data/raw/market/20260618-153000/ai_judgements.json
-etfmate report --run-id 20260618-153000
-```
-
-不要把 `daily`、`--date`、`--codes` 或 `data/manual/*.example.json` 作为正式分析流程。
-
-## 资源说明
-
-- `scripts/health_check.py`：检查 Python 分析依赖、`a-stock-data` skill、`web-access` skill 和 web-access Proxy 可见性。
-- `scripts/scaffold_etfmate.py`：生成或补齐 ETFMate Python CLI 项目骨架。维护该脚本时必须保持实时 `run/run_id` 流程，并使用 web-access Proxy 采集，不要回退到旧浏览器自动化、`daily/date` 或样例数据流程。
-- `references/etfmate-domain-rules.md`：skill 运行期检查清单，不作为完整产品规则副本。
+最小底仓、最大持仓未设置表示不设对应固定限制，不作为缺失数据，也不要求用户补填。可以给出随行情和持仓复评的策略保留量建议，必须与平台当前设置分开展示；已设置上下限继续遵守。建议数量显示「建议份额」，空值说明具体原因，不使用「待核验份」或逐格追加「候选份额，待核验」。未设置上限不等于资金无限，不取消组合保护、资金占用和最终清仓约束。

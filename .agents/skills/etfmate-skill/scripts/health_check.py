@@ -14,9 +14,8 @@ from pathlib import Path
 
 REQUIRED_MODULES = [
     "pandas",
-    "stockstats",
-    "mootdx",
     "requests",
+    "jinja2",
 ]
 
 
@@ -28,8 +27,6 @@ def module_status(name: str) -> dict[str, object]:
 def candidate_skill_paths() -> list[Path]:
     home = Path.home()
     paths = [
-        home / ".agents" / "skills" / "a-stock-data" / "SKILL.md",
-        home / ".codex" / "skills" / "a-stock-data" / "SKILL.md",
         home / ".agents" / "skills" / "web-access" / "SKILL.md",
         home / ".codex" / "skills" / "web-access" / "SKILL.md",
     ]
@@ -37,7 +34,6 @@ def candidate_skill_paths() -> list[Path]:
     if codex_home:
         paths.extend(
             [
-                Path(codex_home) / "skills" / "a-stock-data" / "SKILL.md",
                 Path(codex_home) / "skills" / "web-access" / "SKILL.md",
             ]
         )
@@ -57,10 +53,9 @@ def web_access_proxy_status() -> dict[str, object]:
 def main() -> int:
     modules = [module_status(name) for name in REQUIRED_MODULES]
     paths = candidate_skill_paths()
-    a_stock_paths = [str(path) for path in paths if path.exists() and path.parent.name == "a-stock-data"]
     web_access_paths = [str(path) for path in paths if path.exists() and path.parent.name == "web-access"]
     proxy = web_access_proxy_status()
-    ok = all(item["ok"] for item in modules) and bool(a_stock_paths) and bool(web_access_paths) and proxy["ok"]
+    ok = all(item["ok"] for item in modules) and bool(web_access_paths) and proxy["ok"]
 
     payload = {
         "ok": ok,
@@ -68,7 +63,6 @@ def main() -> int:
         "platform": platform.platform(),
         "node": {"ok": shutil.which("node") is not None, "path": shutil.which("node")},
         "modules": modules,
-        "a_stock_data_skill": {"ok": bool(a_stock_paths), "paths": a_stock_paths},
         "web_access_skill": {"ok": bool(web_access_paths), "paths": web_access_paths},
         "web_access_proxy": proxy,
         "next_steps": [],
@@ -77,8 +71,6 @@ def main() -> int:
     missing = [item["name"] for item in modules if not item["ok"]]
     if missing:
         payload["next_steps"].append("安装缺失依赖: python -m pip install " + " ".join(missing))
-    if not a_stock_paths:
-        payload["next_steps"].append("确认 a-stock-data skill 已安装到 ~/.agents/skills 或 ~/.codex/skills")
     if not web_access_paths:
         payload["next_steps"].append("确认 web-access skill 已安装到 ~/.agents/skills 或 ~/.codex/skills")
     if not proxy["ok"]:

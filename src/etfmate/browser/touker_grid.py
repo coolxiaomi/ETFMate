@@ -135,12 +135,19 @@ def _grid_records_from_text(text: str) -> list[dict]:
             record["order_quantity"] = quantity_match.group(1)
             record["buy_quantity"] = quantity_match.group(1)
             record["sell_quantity"] = quantity_match.group(1)
-        min_base_match = re.search(r"最小底仓\s*(\d+)股", block)
-        if min_base_match:
-            record["min_base_quantity"] = min_base_match.group(1)
-        max_position_match = re.search(r"最大持仓\s*(\d+)股", block)
-        if max_position_match:
-            record["max_position_quantity"] = max_position_match.group(1)
+        quantity_line = re.search(r"委托股数[:：]([^\n]*)", block)
+        if quantity_line:
+            for side, field in (("买入", "buy_quantity"), ("卖出", "sell_quantity")):
+                side_match = re.search(rf"{side}\s*[:：]\s*(\d+)\s*股", quantity_line.group(1))
+                if side_match:
+                    record[field] = side_match.group(1)
+        for label, field in (("最小底仓", "min_base_quantity"), (r"最大(?:持仓|底仓)", "max_position_quantity")):
+            limit_match = re.search(rf"{label}[^\S\n]*[:：]?[^\S\n]*([^\s股份]+)", block)
+            if limit_match:
+                value = limit_match.group(1).replace(",", "")
+                if value not in {"--", "-", "未设置", "不限制", "不限"}:
+                    # Keep malformed values for the quality gate; do not call them unset.
+                    record[field] = value
         if condition_type == "sell_only":
             price_match = re.search(r"当前价格\s*([0-9.]+)", block)
             if price_match and "last_price" not in record:
@@ -156,9 +163,22 @@ def _grid_records_from_text(text: str) -> list[dict]:
 
 
 def _condition_type_from_block(block: str) -> str:
+    if "网格交易" in block or "最新基准价" in block:
+        return "grid"
     if "分批出货" in block or "股价高于" in block:
         return "sell_only"
+    if "分批建仓" in block or "股价低于" in block:
+        return "buy_only"
     return "grid"
+
+
+def is_grid_condition(record: dict[str, Any]) -> bool:
+    """Exclude identified non-grid orders, including legacy misclassified snapshots."""
+    block = str(record.get("raw_text") or "")
+    if block and _condition_type_from_block(block) != "grid":
+        return False
+    condition_type = str(record.get("condition_type") or record.get("类型") or "grid").strip().lower()
+    return condition_type in {"grid", "网格", "网格交易"}
 
 
 def _condition_identity(record: dict, block: str) -> str:
@@ -169,10 +189,12 @@ def _condition_identity(record: dict, block: str) -> str:
             str(record.get(key) or "")
             for key in ("sell_plan_trigger_price", "sell_rise_pct", "sell_plan_max_quantity", "order_quantity")
         )
+    elif ctype != "grid":
+        signature = block
     else:
         signature = "|".join(
             str(record.get(key) or "")
-            for key in ("base_price", "buy_fall_pct", "buy_rebound_pct", "sell_rise_pct", "sell_pullback_pct", "order_quantity")
+            for key in ("base_price", "buy_fall_pct", "buy_rebound_pct", "sell_rise_pct", "sell_pullback_pct", "order_quantity", "buy_quantity", "sell_quantity")
         )
     return f"{code}|{ctype}|{signature}"
 

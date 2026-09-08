@@ -65,6 +65,7 @@ class TGridResult:
     t_grid_score: float = 0.0
     t_grid_level: str = "不适合T网格"
     t_grid_action: str = "观察，不开启T网格"
+    sell_execution_status: str = "PENDING_VERIFICATION"
 
     close: float | None = None
     avg_amount_20: float | None = None
@@ -242,6 +243,7 @@ def analyze_single_etf_for_t_grid(
 
     result.reason = _positive_reasons(latest, result, params)
     result.risk = list(dict.fromkeys(risk + _risk_tags(latest, params, cfg)))
+    result.risk.append("不接受亏损，交易费用忽略：T网格缺少实际底仓及逐笔成本，仅保留候选与历史估算；确认每笔卖出价格不低于对应成本前暂停双边执行。")
     result.reject_reason = list(dict.fromkeys(reject_reason))
     if not result.reject_reason and not result.risk:
         result.risk.append("T网格收益为历史估算，不代表未来收益")
@@ -439,11 +441,11 @@ def decide_t_grid_lifecycle(
     else:
         action = "关闭T网格"
     return {
-        "can_open_t_grid": can_open,
-        "should_pause_buy": should_pause_buy,
-        "should_pause_sell": should_pause_sell,
+        "can_open_t_grid": False,
+        "should_pause_buy": True,
+        "should_pause_sell": True,
         "should_close_t_grid": should_close,
-        "t_grid_action": action,
+        "t_grid_action": "关闭T网格" if action == "关闭T网格" else "观察，待不亏卖出核验",
     }
 
 

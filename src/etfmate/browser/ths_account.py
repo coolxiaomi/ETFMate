@@ -53,20 +53,12 @@ def collect(root: Path, out_dir: Path) -> dict:
         for range_tab in THS_TRADE_RANGE_TABS:
             trade_snapshots[range_tab] = _collect_tab_snapshot(session, range_tab, out_dir / f"trades_{_safe_name(range_tab)}")
 
-        session.navigate(THS_WATCHLIST_URL)
-        time.sleep(2)
-        session.screenshot(out_dir / "watchlist_preload.png")
-        watchlist_snapshot = _collect_scroll_loaded_snapshot(session, "自选ETF池")
-        (out_dir / "watchlist_snapshot.json").write_text(json.dumps(watchlist_snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-        (out_dir / "watchlist_text.txt").write_text(str(watchlist_snapshot.get("text", "")), encoding="utf-8")
-        session.screenshot(out_dir / "watchlist.png")
         (out_dir / "ths_tabs_snapshot.json").write_text(
             json.dumps(
                 {
                     "positions": snapshot,
                     "closed_positions": closed_snapshot,
                     "trade_records": trade_snapshots,
-                    "watchlist": watchlist_snapshot,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -97,26 +89,14 @@ def collect(root: Path, out_dir: Path) -> dict:
         "成交数量",
     )
     closed_positions = _dedupe(_extract_records(closed_records, _looks_like_closed_position), "code", "证券代码", "symbol", "名称")
-    watchlist, filtered = extract_watchlist(watchlist_snapshot)
-    watchlist_source_url = str(watchlist_snapshot.get("url") or THS_WATCHLIST_URL)
     return {
         "positions": positions,
         "account_summary": account_summary,
         "trades": trades,
         "closed_positions": closed_positions,
-        "watchlist": watchlist,
-        "watchlist_filtered_out": filtered,
-        "watchlist_stats": {
-            "included": len(watchlist),
-            "filtered": len(filtered),
-            "source_url": watchlist_source_url,
-            "canonical_url": THS_WATCHLIST_URL,
-            "note": "仅从同花顺投资账本自选页提取 ETF 池；排除持仓缓存，保留 ETF/LOF/场内基金及商品/黄金/QDII 等场内基金标的",
-        },
         "snapshot": snapshot,
         "closed_snapshot": closed_snapshot,
         "trade_snapshots": trade_snapshots,
-        "watchlist_snapshot": watchlist_snapshot,
     }
 
 
@@ -440,7 +420,7 @@ def _account_summary_from_snapshot(snapshot: dict[str, Any], positions: list[dic
         "可用资金",
         "可用余额",
         "现金",
-    ) or _extract_labeled_number(text, ("可用资金", "可用余额", "现金"))
+    ) or _extract_labeled_number(text, ("可用资金", "可用余额", "现金余额", "现金"))
     total_market_value = sum(_to_number(_pick_value(item, "market_value", "marketValue", "参考市值", "市值", "持仓市值", default=0)) for item in positions)
     if not total_asset and cash and total_market_value:
         total_asset = cash + total_market_value

@@ -20,6 +20,8 @@ class Position:
     account_total_asset: float | None = None
     note: str | None = None
     source: str = "ths"
+    net_invested_amount: float | None = None
+    cost_basis_verified: bool = False
 
 
 @dataclass

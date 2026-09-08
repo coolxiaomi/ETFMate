@@ -8,6 +8,7 @@ from typing import Any
 
 from etfmate.analysis.ai_advisor import (
     AI_JUDGEMENTS_FILE,
+    AI_REVIEW_CONTRACT,
     AI_REVIEW_INPUT_FILE,
     attach_ai_judgements,
     build_ai_review_input,
@@ -20,15 +21,14 @@ from etfmate.analysis.data_quality import (
     require_data_quality_pass,
 )
 from etfmate.analysis.grid_advisor import advise_grid
-from etfmate.analysis.layered_context import build_layered_context, context_to_dict
 from etfmate.analysis.recommendation import recommend
-from etfmate.analysis.t_grid import analyze_t_grid_candidates, results_to_dicts
+from etfmate.analysis.account_strategy import ANALYSIS_CONTRACT, TARGETS, account_overview
 from etfmate.analysis.trade_reviewer import review_trade_periods, review_trades
 from etfmate.browser import ths_account, touker_grid
 from etfmate.browser.session import LoginRequiredError, WebAccessNotReadyError, require_web_access_proxy
-from etfmate.market.providers import build_market_snapshot, fetch_daily_ohlcv, normalize_etf_code
+from etfmate.market.providers import build_market_snapshot, normalize_etf_code
 from etfmate.report.daily_report import write_report
-from etfmate.storage.models import GridConfig, Position, Trade, WatchItem
+from etfmate.storage.models import GridConfig, Position, Trade
 from etfmate.storage.repository import read_json, run_id_str, write_json
 
 
@@ -118,30 +118,22 @@ def run_analyze(root: Path, run_id: str) -> None:
     positions = [_position(item, account_summary) for item in _items(account, "positions")]
     current_positions = [item for item in positions if (item.quantity or 0) > 0]
     trades = [_trade(item) for item in _items(account, "trades")]
-    grids = [_grid(item) for item in _items(grid_payload, "grids")]
-    watchlist, watchlist_filtered = _watchlist_from_account(account)
+    grids = [_grid(item) for item in _items(grid_payload, "grids") if touker_grid.is_grid_condition(item)]
     _require_items({"positions": positions}, "positions", "缺少同花顺持仓数据，不能生成实时分析。")
     _require_items({"grids": grids}, "grids", "缺少 Touker 网格数据，不能生成实时分析。")
 
-    universe_codes = {item.code for item in current_positions} | {item.code for item in watchlist}
+    universe_codes = {item.code for item in current_positions} | {item.code for item in grids} | set(TARGETS)
     codes = sorted(universe_codes)
     snapshots = [build_market_snapshot(code) for code in codes]
-    watch_by_code = {item.code: item for item in watchlist}
     for snapshot in snapshots:
-        watch = watch_by_code.get(snapshot.code)
-        if watch and _prefer_name(snapshot.name, watch.name, snapshot.code) == watch.name:
-            snapshot.name = watch.name
-    snapshots_by_code = {item.code: item for item in snapshots}
+        if snapshot.code in TARGETS:
+            snapshot.name = _prefer_name(snapshot.name, TARGETS[snapshot.code]["name"], snapshot.code)
     positions_by_code = {item.code: item for item in current_positions}
     grids_by_code: dict[str, GridConfig] = {}
     for item in grids:
         existing = grids_by_code.get(item.code)
         if existing is None or (item.condition_type == "grid" and existing.condition_type != "grid"):
             grids_by_code[item.code] = item
-    layered_contexts = {
-        item.code: build_layered_context(positions_by_code.get(item.code), grids_by_code.get(item.code), item, current_positions)
-        for item in snapshots
-    }
     recommendations = [
         recommend(
             positions_by_code.get(item.code),
@@ -149,8 +141,6 @@ def run_analyze(root: Path, run_id: str) -> None:
             item,
             all_positions=current_positions,
             all_markets=snapshots,
-            layered_context=layered_contexts.get(item.code),
-            watch_item=watch_by_code.get(item.code),
         )
         for item in snapshots
     ]
@@ -160,38 +150,25 @@ def run_analyze(root: Path, run_id: str) -> None:
             grids_by_code.get(item.code),
             item,
             positions_by_code.get(item.code),
-            layered_context=layered_contexts.get(item.code),
             rule_decision=rule_decisions.get(item.code),
         )
         for item in snapshots
     ]
-    t_grid_data, t_grid_sources = _t_grid_daily_data(watchlist)
-    t_grid_advices = results_to_dicts(
-        analyze_t_grid_candidates(
-            t_grid_data,
-            etf_name_map={item.code: item.name for item in watchlist},
-            grid_qty=1000,
-            data_source_map=t_grid_sources,
-        )
-    )
-    ai_review_input = build_ai_review_input(recommendations, grid_advices, t_grid_advices)
+    ai_review_input = build_ai_review_input(recommendations, grid_advices)
     ai_judgements = load_host_ai_judgements(root, run_id, recommendations)
     recommendations = attach_ai_judgements(recommendations, ai_judgements)
     run_date = _run_date(run_id)
     payload = {
+        "analysis_contract": ANALYSIS_CONTRACT,
         "run_id": run_id,
         "analysis_time": _analysis_time(run_id),
         "positions_count": len(current_positions),
         "grids_count": len(grids),
-        "watchlist_count": len(watchlist),
-        "watchlist_filtered_count": len(watchlist_filtered),
-        "watchlist": watchlist,
-        "watchlist_filtered_out": watchlist_filtered,
+        "ignored_conditions_count": len(_items(grid_payload, "grids")) - len(grids),
+        "account_overview": account_overview(recommendations, account_summary),
         "market_snapshots": [asdict(s) for s in snapshots],
-        "layered_contexts": {code: context_to_dict(context) for code, context in layered_contexts.items()},
         "recommendations": recommendations,
         "grid_advices": grid_advices,
-        "t_grid_advices": t_grid_advices,
         "ai_review_input_path": f"data/raw/market/{run_id}/{AI_REVIEW_INPUT_FILE}",
         "ai_judgements": ai_judgements,
         "trade_review": review_trades(trades),
@@ -218,7 +195,6 @@ def run_report(root: Path, run_id: str) -> None:
     require_data_quality_pass(quality, "报告前")
     recommendations = analysis.get("recommendations", [])
     grid_advices = analysis.get("grid_advices", [])
-    t_grid_advices = analysis.get("t_grid_advices", [])
     ai_judgements = load_host_ai_judgements(root, run_id, recommendations)
     recommendations = attach_ai_judgements(recommendations, ai_judgements)
     review = analysis.get("trade_review") or review_trades([])
@@ -229,20 +205,16 @@ def run_report(root: Path, run_id: str) -> None:
     positions_count = sum(1 for item in (_position(raw, account_summary) for raw in _items(account, "positions")) if (item.quantity or 0) > 0)
     trades_count = len(_items(account, "trades"))
     closed_count = len(_items(account, "closed_positions"))
-    watchlist, watchlist_filtered = _watchlist_from_account(account)
-    grids_list = _items(grid_payload, "grids")
+    conditions_list = _items(grid_payload, "grids")
+    grids_list = [item for item in conditions_list if touker_grid.is_grid_condition(item)]
     grids_count = len(grids_list)
     grids_active = sum(1 for g in grids_list if _bool(_pick(g, "enabled", "启用", default=True)))
     snapshots = analysis.get("market_snapshots", [])
     sources = {s.get("data_quality", "") for s in snapshots if isinstance(s, dict) and s.get("data_quality")}
-    layered_contexts = analysis.get("layered_contexts") or {}
     ai_enabled_count = sum(1 for item in ai_judgements.values() if isinstance(item, dict) and item.get("enabled"))
-    layer_count = len(layered_contexts)
-    avg_layer_confidence = _avg_number(item.get("confidence") for item in layered_contexts.values() if isinstance(item, dict))
-    layer_sources = _layer_source_summary(layered_contexts)
     data_completeness = {
+        "account_summary": account_summary,
         "stats": {
-            "watchlist_count": len(watchlist),
             "positions_count": positions_count,
             "grids_count": grids_count,
         },
@@ -261,26 +233,8 @@ def run_report(root: Path, run_id: str) -> None:
                 "source": "同花顺投资账本持仓页",
                 "note": _account_summary_note(account_summary),
             },
-            {
-                "label": "同花顺自选ETF池",
-                "count": f"{len(watchlist)} 只，过滤 {len(watchlist_filtered)} 条",
-                "source": "同花顺投资账本自选页/缓存/DOM",
-                "note": "保留 ETF/LOF/场内基金，含商品、黄金、跨境/QDII 等场内基金标的；仅过滤股票、可转债、港股股票和非场内基金",
-            },
-            {"label": "Touker 网格", "count": f"{grids_count}（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker", "note": "完整" if grids_count else "无数据"},
-            {"label": "行情/K 线", "count": f"{len(snapshots)} 只", "source": "; ".join(sorted(sources)) or "N/A", "note": "由 a-stock-data/本地行情适配器决策"},
-            {
-                "label": "T网格",
-                "count": f"{len(t_grid_advices)} 只",
-                "source": "同花顺自选ETF池 + 完整日线OHLCV",
-                "note": "只分析自选池ETF；收益为历史估算，不代表未来收益",
-            },
-            {
-                "label": "七层证据",
-                "count": f"{layer_count} 只，平均置信度 {_fmt_pct(avg_layer_confidence)}",
-                "source": layer_sources,
-                "note": "缺失层不生成假结论，只降低建议强度",
-            },
+            {"label": "Touker 网格", "count": f"{grids_count}（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker", "note": f"采集条件单 {len(conditions_list)} 条，忽略非网格 {len(conditions_list) - grids_count} 条；网格完整" if grids_count else "无网格数据"},
+            {"label": "行情/K 线", "count": f"{len(snapshots)} 只", "source": "; ".join(sorted(sources)) or "N/A", "note": "由本地 ETF 行情适配器提供"},
             {
                 "label": "AI 综合研判",
                 "count": f"{len(ai_judgements)} 只，已启用 {ai_enabled_count} 只",
@@ -290,7 +244,7 @@ def run_report(root: Path, run_id: str) -> None:
         ]
     }
     label = analysis.get("analysis_time") or _analysis_time(run_id)
-    out = write_report(root / "data/reports" / f"{run_id}-etf-realtime.html", label, recommendations, grid_advices, review, data_completeness, t_grid_advices)
+    out = write_report(root / "data/reports" / f"{run_id}-etf-realtime.html", label, recommendations, grid_advices, review, data_completeness)
     print(f"已生成实时报告: {out}")
 
 
@@ -299,11 +253,15 @@ def run_ai_attach(root: Path, run_id: str, input_path: Path) -> None:
     analysis = read_json(analysis_path, default={})
     if not analysis:
         raise RuntimeError(f"未找到分析结果: data/raw/market/{run_id}/analysis.json")
+    if analysis.get("analysis_contract") != ANALYSIS_CONTRACT:
+        raise RuntimeError("分析契约已更新，请重新 analyze 后再复核。")
     source = input_path if input_path.is_absolute() else (root / input_path)
     payload = read_json(source, default={})
+    if not isinstance(payload, dict) or payload.get("review_contract") != AI_REVIEW_CONTRACT:
+        raise RuntimeError("AI 输入契约已更新，请按本次 ai_review_input.json 重新生成复核文件")
     recommendations = analysis.get("recommendations", [])
     ai_judgements = normalize_host_ai_judgements(payload, recommendations)
-    write_json(root / "data/raw/market" / run_id / AI_JUDGEMENTS_FILE, ai_judgements)
+    write_json(root / "data/raw/market" / run_id / AI_JUDGEMENTS_FILE, payload)
     analysis["ai_judgements"] = ai_judgements
     analysis["recommendations"] = attach_ai_judgements(recommendations, ai_judgements)
     write_json(analysis_path, analysis)
@@ -313,20 +271,6 @@ def run_ai_attach(root: Path, run_id: str, input_path: Path) -> None:
 def _require_items(payload: Any, key: str, message: str) -> None:
     if not _items(payload, key):
         raise RuntimeError(message)
-
-
-def _t_grid_daily_data(watchlist: list[WatchItem]) -> tuple[dict[str, Any], dict[str, str]]:
-    data: dict[str, Any] = {}
-    sources: dict[str, str] = {}
-    for item in watchlist:
-        try:
-            df, source = fetch_daily_ohlcv(item.code)
-            data[item.code] = df
-            sources[item.code] = source
-        except Exception as exc:
-            data[item.code] = []
-            sources[item.code] = f"kline:error:{type(exc).__name__}"
-    return data, sources
 
 
 def _run_date(run_id: str) -> str:
@@ -450,39 +394,10 @@ def _grid(raw: dict) -> GridConfig:
         sell_pullback_pct=_maybe_num(_pick(raw, "sell_pullback_pct", "sellPullbackPct", "pullbackRate", "卖出回落", default=None)),
         buy_fall_pct=_maybe_num(_pick(raw, "buy_fall_pct", "buyFallPct", "fallRate", "买入下跌", default=None)),
         buy_rebound_pct=_maybe_num(_pick(raw, "buy_rebound_pct", "buyReboundPct", "reboundRate", "买入反弹", default=None)),
-        min_base_quantity=_maybe_num(_pick(raw, "min_base_quantity", "minBaseQuantity", "最小底仓", default=None)),
-        max_position_quantity=_maybe_num(_pick(raw, "max_position_quantity", "maxPositionQuantity", "最大持仓", default=None)),
+        min_base_quantity=_optional_grid_limit(_pick(raw, "min_base_quantity", "minBaseQuantity", "最小底仓", default=None)),
+        max_position_quantity=_optional_grid_limit(_pick(raw, "max_position_quantity", "maxPositionQuantity", "最大持仓", "最大底仓", default=None)),
         last_trigger_time=str(_pick(raw, "last_trigger_time", "最近触发时间", default="")),
     )
-
-
-def _watch_item(raw: dict) -> WatchItem:
-    code = normalize_etf_code(str(_pick(raw, "code", "symbol", "stockCode", "securityCode", "证券代码", "代码")))
-    return WatchItem(
-        code=code,
-        name=str(_pick(raw, "name", "stock_name", "securityName", "stockName", "证券名称", "名称", default=code)),
-        source=str(_pick(raw, "source", default="ths_watchlist")),
-        raw_type=_text(_pick(raw, "raw_type", "type", "securityType", default="")),
-        include_reason=_text(_pick(raw, "include_reason", default="")),
-        source_key=_text(_pick(raw, "source_key", default="")),
-    )
-
-
-def _watchlist_from_account(account: dict) -> tuple[list[WatchItem], list[dict]]:
-    watch_items = _items(account, "watchlist")
-    filtered = _items(account, "watchlist_filtered_out")
-    clean_watch_items = [
-        item
-        for item in watch_items
-        if isinstance(item, dict) and not ths_account.is_position_cache_source_key(item.get("source_key"))
-    ]
-    dirty_watch_items = [
-        {**item, "filter_reason": "排除同花顺持仓缓存，不作为自选ETF池"}
-        for item in watch_items
-        if isinstance(item, dict) and ths_account.is_position_cache_source_key(item.get("source_key"))
-    ]
-    clean_filtered = [item for item in filtered if isinstance(item, dict)]
-    return [_watch_item(item) for item in clean_watch_items], clean_filtered + dirty_watch_items
 
 
 def _prefer_name(current: str, candidate: str, code: str) -> str:
@@ -526,6 +441,16 @@ def _num(value: Any) -> float:
         return 0.0
 
 
+def _optional_grid_limit(value: Any) -> float | None:
+    if value is None or str(value).strip() in {"", "--", "-", "未设置", "不限制", "不限"}:
+        return None
+    from math import isfinite
+    quantity = float(str(value).replace(",", "").strip())
+    if not isfinite(quantity) or quantity < 0 or not quantity.is_integer():
+        raise ValueError("网格底仓上下限必须是非负整数或未设置")
+    return quantity
+
+
 def _maybe_num(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -537,20 +462,6 @@ def _bool(value: Any) -> bool:
         return value
     text = str(value).strip().lower()
     return text not in {"false", "0", "否", "暂停", "停用", "disabled"}
-
-
-def _avg_number(values: Any) -> float | None:
-    nums = []
-    for value in values:
-        try:
-            nums.append(float(value))
-        except (TypeError, ValueError):
-            continue
-    return sum(nums) / len(nums) if nums else None
-
-
-def _fmt_pct(value: float | None) -> str:
-    return "-" if value is None else f"{value:.0f}%"
 
 
 def _account_summary_count(summary: dict | None) -> str:
@@ -582,21 +493,6 @@ def _fmt_money(value: float | None) -> str:
     if value is None:
         return "-"
     return f"{value:,.2f}"
-
-
-def _layer_source_summary(layered_contexts: dict) -> str:
-    if not layered_contexts:
-        return "N/A"
-    statuses: dict[str, int] = {}
-    for context in layered_contexts.values():
-        if not isinstance(context, dict):
-            continue
-        for layer in context.get("layers") or []:
-            status = str(layer.get("status") or "未知")
-            statuses[status] = statuses.get(status, 0) + 1
-    if not statuses:
-        return "N/A"
-    return "；".join(f"{key} {value} 层次项" for key, value in sorted(statuses.items()))
 
 
 if __name__ == "__main__":

@@ -1,36 +1,11 @@
-# ETFMate Skill 契约维护说明
+# Skill 与产品契约
 
-## 定位
+Skill负责入口路由、真实采集流程、AI复核与默认发布；产品规则以investment-plan、sell-policy、rule、action、grid、report和data-quality文档为准。
 
-`.agents/skills/etfmate-skill/SKILL.md` 是 ETFMate 的入口契约，只负责让 agent 在正确场景触发正确流程。它不再复制完整业务规则。
+当前契约为`etf_account_transition_v4`：4只指定目标、低频波动与分批建仓、成长40%/价值60%、非目标旧仓退出、最终清仓不亏；最终组合通过管理旧仓、回收资金逐步达到。已移除自选池采集和独立T网格分析。
 
-入口契约必须直接保留：
+明确讨论、分析标的选择或修改skill时不自动采集发布；运行分析/报告的快捷口令默认完整实时采集并ShareOne发布。明确本地或不发布则遵守。
 
-1. 短口令触发范围，例如 `分析ETF`、`跑 ETFMate`、`ETFMate`。
-2. 默认完整流程：真实采集、分析、宿主 AI 复核、HTML 报告、ShareOne 发布。
-3. 必须使用 `$web-access` 和真实登录态数据。
-4. 核心源缺失、登录态失效、验证码、风控、滚动加载未采齐时停止。
-5. `ai_review_input.json` / `ai_judgements.json` 的宿主 AI 复核约定。
+正式运行必须真实同花顺/Touker登录态和完整滚动证据，行情只覆盖规定范围。当前AI和分析版本必须一致。测试、演示或历史复用不能称作当前真实账户报告。
 
-## 文档权威顺序
-
-产品和规则细节以 `docs/` 为准：
-
-- `docs/score.md`：趋势评分。
-- `docs/action.md`：仓位动作。
-- `docs/rule.md`：规则引擎、ETF 池和 AI 边界。
-- `docs/grid.md`：Touker 网格建议。
-- `docs/t-grid.md`：震荡网格（T网格）候选筛选、参数、生命周期、回测估算和报告隔离契约。
-- `docs/report.md`：HTML 报告展示契约。
-- `docs/data-quality.md`：采集完整性、字段完整性和 analyze/report 前的硬阻断闸门。
-
-Skill 专用 reference 只保留运行检查清单：
-
-- `.agents/skills/etfmate-skill/references/etfmate-domain-rules.md`
-
-## 维护规则
-
-- 改触发词、默认发布策略、web-access 强制流程或硬阻断条件时，同步更新 `SKILL.md` 和 skill reference。
-- 改评分、动作、网格、报告或 AI 输入字段时，优先更新对应 `docs/*.md`、运行代码和测试；`SKILL.md` 只需要保持索引准确。
-- 不在 `SKILL.md` 中重复粘贴网格参数、趋势评分、HTML 表格布局等细节，避免同一规则多处漂移。
-- 正式分析仍必须使用同花顺和 Touker 的真实登录态数据；文档精简不放宽采集完整性或 ShareOne 发布前置条件。
+修改规则要同步Python、聚焦测试与对应docs；修改入口/采集范围/版本要同步SKILL.md、agents/openai.yaml和运行检查清单。不提交账户数据或测试预览，不自动改真实条件单或交易。

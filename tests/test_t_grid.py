@@ -17,7 +17,10 @@ def test_t_grid_candidate_uses_t_grid_name_and_default_1000_qty():
     result = analyze_single_etf_for_t_grid("159999", _sideways_df(), name="测试ETF")
 
     assert result.is_t_grid_candidate is True
-    assert result.t_grid_action == "开启T网格"
+    assert result.t_grid_action == "观察，待不亏卖出核验"
+    assert result.can_open_t_grid is False
+    assert result.should_pause_sell is True
+    assert result.should_pause_buy is True
     assert result.grid_qty == 1000
     assert result.grid_count_up >= 2
     assert result.grid_count_down >= 2
@@ -60,83 +63,6 @@ def test_t_grid_backtest_conservative_path_does_not_double_count_same_day_loop()
 
     assert result.triggered_grid_count == result.backtest_days
     assert result.avg_triggered_grids_per_day == 1.0
-
-
-def test_report_shows_t_grid_tab_for_all_watchlist_items_without_polluting_grid_tab():
-    recommendations = [
-        _report_item("159901", "候选ETF"),
-        _report_item("159902", "拒绝ETF"),
-    ]
-    t_grids = [
-        {
-            "code": "159901",
-            "name": "候选ETF",
-            "source": "ths_watchlist",
-            "is_t_grid_candidate": True,
-            "t_grid_score": 78,
-            "t_grid_level": "适合T网格",
-            "t_grid_action": "开启T网格",
-            "suggest_grid_step_pct": 2.0,
-            "grid_upper": 1.08,
-            "grid_lower": 0.92,
-            "grid_count_up": 3,
-            "grid_count_down": 3,
-            "grid_qty": 1000,
-            "one_grid_cash": 1000,
-            "suggest_total_cash": 7200,
-            "trigger_probability": 0.7,
-            "hit_rate": 0.6,
-            "avg_close_days": 2.2,
-            "risk_adjusted_annual_return_pct": 12.3,
-            "reason": ["适合震荡做T"],
-            "risk": ["历史估算，不代表未来收益"],
-            "reject_reason": [],
-        },
-        {
-            "code": "159902",
-            "name": "拒绝ETF",
-            "source": "ths_watchlist",
-            "is_t_grid_candidate": False,
-            "t_grid_score": 42,
-            "t_grid_level": "不适合T网格",
-            "t_grid_action": "关闭T网格",
-            "grid_qty": 1000,
-            "reject_reason": ["20日平均成交额低于3000万"],
-            "reason": [],
-            "risk": ["成交额偏低"],
-        },
-    ]
-
-    html = render_html("2026-06-29 10:00:00", recommendations, [], {}, {"stats": {"watchlist_count": 2}}, t_grids)
-    grid_panel = html.split('data-panel="grid"', 1)[1].split('data-panel="strategy"', 1)[0]
-    t_grid_panel = html.split('data-panel="tgrid"', 1)[1]
-
-    assert "T网格" in html
-    assert 'data-filter="pool"><span>2</span><label>ETF池</label></button>' in html
-    assert 'data-filter="tgrid"><span>2</span><label>T网格</label></button>' in html
-    assert re.search(r'data-filter="pool".*data-filter="tgrid".*data-filter="all"', html, re.S)
-    assert re.search(r'<article class="etf-card filter-item" data-tags="[^"]*\btgrid\b[^"]*" id="etf-159901"', html)
-    assert re.search(r'<article class="etf-card filter-item" data-tags="[^"]*\btgrid\b[^"]*" id="etf-159902"', html)
-    assert "自选池 2 只" in t_grid_panel
-    assert 'href="#etf-159901"' in t_grid_panel
-    assert 'href="#etf-159902"' in t_grid_panel
-    assert 'href="#etf-159901"' not in grid_panel
-    assert "20日平均成交额低于3000万" in html
-    assert re.search(r"(?<!\d)0股", html) is None
-    assert "可用数量为0" not in html
-    assert "今日不可卖" not in html
-
-
-def test_grid_tab_uses_decision_panel_group_layout():
-    recommendations = [_report_item("159903", "网格ETF")]
-    grids = [{"code": "159903", "name": "网格ETF", "action": "高位保护", "grid_applicable": True}]
-
-    html = render_html("2026-06-29 10:00:00", recommendations, grids, {}, {}, [])
-    grid_panel = html.split('data-panel="grid"', 1)[1].split('data-panel="strategy"', 1)[0]
-
-    assert '<div class="decision-panel">' in grid_panel
-    assert 'style="--group-count: 1"' in grid_panel
-    assert 'href="#etf-159903"' in grid_panel
 
 
 def _sideways_df(days: int = 123, amount: float = 120_000_000) -> pd.DataFrame:

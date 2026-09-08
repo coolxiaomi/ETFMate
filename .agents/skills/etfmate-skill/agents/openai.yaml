@@ -1,4 +1,4 @@
 interface:
-  display_name: "ETFMate Skill"
-  short_description: "采集 ETF 持仓、网格与七层证据，按组合风险预算生成一致的持仓/网格决策报告"
-  default_prompt: "Use $etfmate-skill and $web-access to run a real-time ETFMate analysis from logged-in 同花顺投资账本 and Touker pages. Generate rule scores, apply portfolio risk budgets before actions, ensure HIGH risk + zero target never renders as ordinary HOLD, read ai_review_input.json, use the current host AI model for guarded AI judgement, write ai_judgements.json, and render the HTML report with compact AI status."
+  display_name: "ETFMate 账户行动报告"
+  short_description: "围绕四只目标ETF生成低频波动、分批建仓和清仓不亏的账户行动报告"
+  default_prompt: "使用 $etfmate-skill 分析真实账户：510500低频赚波动，159141赛道低吸，159259成长40%与159263价值60%逐步建仓，优先逐只管理现有持仓并争取盈利退出，账户不追加也不转出资金，目标组合按价格与可用现金逐步承接回款；不采集自选池、不运行独立T网格，生成并分享账户行动报告。"
