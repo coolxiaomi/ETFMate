@@ -76,9 +76,10 @@ def test_account_cap_is_shown_once_while_each_plan_keeps_specific_conditions():
     assert all(not g["candidate_buy_quantity"] and not g.get("conditional_buyback_quantity") for g in grids)
     assert grids[0]["candidate_sell_quantity"] > 0
     html = render_html("TEST", recs, grids, {})
-    assert html.count("90.83%") == 1 and html.count("80%保护线") == 1
+    assert html.count("90.83%") == 1 and html.count("80%新增买入门槛") == 1
     assert "暂不启用整单" not in html and "量价条件未确认" not in html
-    assert "反弹分批卖出" in html and "等待真实卖出回款" in html
+    assert "等待反弹，分批回收资金" in html and "本批次暂停回补" in html
+    assert "建议" in html and "后续网格参数草案" in html
     ai = build_ai_review_input(recs, grids)
     assert ai["items"][0]["action_plan"] == describe_action_plan(recs[0], grids[0])
 

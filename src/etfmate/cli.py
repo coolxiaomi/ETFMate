@@ -5,19 +5,22 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from etfmate.analysis.ai_advisor import (
     AI_JUDGEMENTS_FILE,
     AI_REVIEW_CONTRACT,
     AI_REVIEW_INPUT_FILE,
     attach_ai_judgements,
-    build_ai_review_input,
+    ai_review_validation_errors,
     load_host_ai_judgements,
     normalize_host_ai_judgements,
+    review_input_for_analysis,
 )
 from etfmate.analysis.data_quality import (
     build_analysis_data_quality_report,
     build_raw_data_quality_report,
+    build_report_data_quality_report,
     require_data_quality_pass,
 )
 from etfmate.analysis.grid_advisor import advise_grid
@@ -117,6 +120,13 @@ def run_analyze(root: Path, run_id: str) -> None:
     account_summary = (account.get("account_summary") or account.get("summary") or {}) if isinstance(account, dict) else {}
     positions = [_position(item, account_summary) for item in _items(account, "positions")]
     current_positions = [item for item in positions if (item.quantity or 0) > 0]
+    from etfmate.analysis.inventory_plan import build_inventory_plan
+    from etfmate.analysis.funding_plan import build_funding_plan
+    from etfmate.analysis.action_plan import describe_action_plan
+    from etfmate.analysis.decision_review import build_decision_review
+    analysis_time = datetime.now().astimezone().isoformat(timespec="seconds")
+    inventory_plan = build_inventory_plan(account, analysis_time[:10])
+    funding_plan = build_funding_plan(account, _items(grid_payload, "grids"))
     trades = [_trade(item) for item in _items(account, "trades")]
     grids = [_grid(item) for item in _items(grid_payload, "grids") if touker_grid.is_grid_condition(item)]
     _require_items({"positions": positions}, "positions", "缺少同花顺持仓数据，不能生成实时分析。")
@@ -151,29 +161,38 @@ def run_analyze(root: Path, run_id: str) -> None:
             item,
             positions_by_code.get(item.code),
             rule_decision=rule_decisions.get(item.code),
+            inventory=inventory_plan.get(item.code),
+            funding=funding_plan,
         )
         for item in snapshots
     ]
-    ai_review_input = build_ai_review_input(recommendations, grid_advices)
-    ai_judgements = load_host_ai_judgements(root, run_id, recommendations)
-    recommendations = attach_ai_judgements(recommendations, ai_judgements)
     run_date = _run_date(run_id)
     payload = {
         "analysis_contract": ANALYSIS_CONTRACT,
         "run_id": run_id,
-        "analysis_time": _analysis_time(run_id),
+        "analysis_time": analysis_time,
+        "ai_review_id": uuid4().hex,
         "positions_count": len(current_positions),
         "grids_count": len(grids),
         "ignored_conditions_count": len(_items(grid_payload, "grids")) - len(grids),
         "account_overview": account_overview(recommendations, account_summary),
+        "funding_plan": funding_plan,
+        "inventory_plan": inventory_plan,
         "market_snapshots": [asdict(s) for s in snapshots],
         "recommendations": recommendations,
         "grid_advices": grid_advices,
+        "action_plans": {item["code"]: describe_action_plan(item, grid)
+                         for item, grid in zip(recommendations, grid_advices)},
+        "decision_review": build_decision_review(recommendations, grid_advices, account_summary, funding_plan),
         "ai_review_input_path": f"data/raw/market/{run_id}/{AI_REVIEW_INPUT_FILE}",
-        "ai_judgements": ai_judgements,
         "trade_review": review_trades(trades),
         "trade_reviews": review_trade_periods(trades, run_date),
     }
+    ai_review_input = review_input_for_analysis(account, grid_payload, payload)
+    payload["ai_review_input_fingerprint"] = ai_review_input["input_fingerprint"]
+    ai_judgements = load_host_ai_judgements(root, run_id, recommendations, ai_review_input)
+    payload["ai_judgements"] = ai_judgements
+    payload["recommendations"] = attach_ai_judgements(recommendations, ai_judgements)
     quality = build_analysis_data_quality_report(account, grid_payload, payload)
     write_json(root / "data/raw/market" / run_id / "data_quality.json", quality)
     require_data_quality_pass(quality, "分析结果")
@@ -188,14 +207,17 @@ def run_report(root: Path, run_id: str) -> None:
     analysis = read_json(root / "data/raw/market" / run_id / "analysis.json", default={})
     if not analysis:
         raise RuntimeError(f"未找到分析结果: data/raw/market/{run_id}/analysis.json")
+    if not isinstance(analysis, dict) or analysis.get("run_id") != run_id:
+        raise RuntimeError("分析运行编号与请求批次不一致，请重新 analyze。")
     account = read_json(root / "data/raw/ths" / run_id / "account.json", default={})
     grid_payload = read_json(root / "data/raw/touker" / run_id / "grids.json", default={})
-    quality = build_analysis_data_quality_report(account, grid_payload, analysis)
+    ai_payload = read_json(root / "data/raw/market" / run_id / AI_JUDGEMENTS_FILE, default={})
+    quality = build_report_data_quality_report(account, grid_payload, analysis, ai_payload)
     write_json(root / "data/raw/market" / run_id / "data_quality.json", quality)
     require_data_quality_pass(quality, "报告前")
     recommendations = analysis.get("recommendations", [])
     grid_advices = analysis.get("grid_advices", [])
-    ai_judgements = load_host_ai_judgements(root, run_id, recommendations)
+    ai_judgements = normalize_host_ai_judgements(ai_payload, recommendations, review_input_for_analysis(account, grid_payload, analysis))
     recommendations = attach_ai_judgements(recommendations, ai_judgements)
     review = analysis.get("trade_review") or review_trades([])
     if analysis.get("trade_reviews"):
@@ -214,6 +236,14 @@ def run_report(root: Path, run_id: str) -> None:
     ai_enabled_count = sum(1 for item in ai_judgements.values() if isinstance(item, dict) and item.get("enabled"))
     data_completeness = {
         "account_summary": account_summary,
+        "conditions": conditions_list,
+        "submitted_orders": grid_payload.get("submitted_orders"),
+        "run_id": run_id,
+        "analysis_time": analysis.get("analysis_time"),
+        "funding_plan": analysis.get("funding_plan"),
+        "inventory_plan": analysis.get("inventory_plan"),
+        "action_plans": analysis.get("action_plans"),
+        "decision_review": analysis.get("decision_review"),
         "stats": {
             "positions_count": positions_count,
             "grids_count": grids_count,
@@ -233,7 +263,7 @@ def run_report(root: Path, run_id: str) -> None:
                 "source": "同花顺投资账本持仓页",
                 "note": _account_summary_note(account_summary),
             },
-            {"label": "Touker 网格", "count": f"{grids_count}（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker", "note": f"采集条件单 {len(conditions_list)} 条，忽略非网格 {len(conditions_list) - grids_count} 条；网格完整" if grids_count else "无网格数据"},
+            {"label": "Touker 条件单", "count": f"{grids_count} 条网格（{grids_active} 监控中 + {grids_count - grids_active} 休眠）", "source": "Touker", "note": f"全部 {len(conditions_list)} 条；其中非网格 {len(conditions_list) - grids_count} 条已纳入资金和冲突复核" if conditions_list else "无条件单数据"},
             {"label": "行情/K 线", "count": f"{len(snapshots)} 只", "source": "; ".join(sorted(sources)) or "N/A", "note": "由本地 ETF 行情适配器提供"},
             {
                 "label": "AI 综合研判",
@@ -253,6 +283,8 @@ def run_ai_attach(root: Path, run_id: str, input_path: Path) -> None:
     analysis = read_json(analysis_path, default={})
     if not analysis:
         raise RuntimeError(f"未找到分析结果: data/raw/market/{run_id}/analysis.json")
+    if not isinstance(analysis, dict) or analysis.get("run_id") != run_id:
+        raise RuntimeError("分析运行编号与请求批次不一致，请重新 analyze。")
     if analysis.get("analysis_contract") != ANALYSIS_CONTRACT:
         raise RuntimeError("分析契约已更新，请重新 analyze 后再复核。")
     source = input_path if input_path.is_absolute() else (root / input_path)
@@ -260,7 +292,17 @@ def run_ai_attach(root: Path, run_id: str, input_path: Path) -> None:
     if not isinstance(payload, dict) or payload.get("review_contract") != AI_REVIEW_CONTRACT:
         raise RuntimeError("AI 输入契约已更新，请按本次 ai_review_input.json 重新生成复核文件")
     recommendations = analysis.get("recommendations", [])
-    ai_judgements = normalize_host_ai_judgements(payload, recommendations)
+    account = read_json(root / "data/raw/ths" / run_id / "account.json", default={})
+    grid_payload = read_json(root / "data/raw/touker" / run_id / "grids.json", default={})
+    quality = build_analysis_data_quality_report(account, grid_payload, analysis)
+    require_data_quality_pass(quality, "AI 复核附加前")
+    expected_input = review_input_for_analysis(account, grid_payload, analysis)
+    if analysis.get("ai_review_input_fingerprint") != expected_input["input_fingerprint"]:
+        raise RuntimeError("当前分析或原始数据已变化，请重新 analyze 后复核。")
+    errors = ai_review_validation_errors(payload, recommendations, expected_input)
+    if errors:
+        raise RuntimeError("AI 复核未通过绑定与完整性校验：\n" + "\n".join(errors))
+    ai_judgements = normalize_host_ai_judgements(payload, recommendations, expected_input)
     write_json(root / "data/raw/market" / run_id / AI_JUDGEMENTS_FILE, payload)
     analysis["ai_judgements"] = ai_judgements
     analysis["recommendations"] = attach_ai_judgements(recommendations, ai_judgements)

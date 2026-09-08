@@ -148,7 +148,9 @@ def test_ai_old_contract_cannot_enable_or_override_liquidation():
     rec=recommend(p,None,m,[p])
     assert normalize_host_ai_judgements({"review_contract":"etf_no_loss_v2","items":[{"code":p.code,"confidence":99}]},[rec])[p.code]["enabled"] is False
     attached=attach_ai_judgements([rec],{p.code:{"enabled":True,"judgement":"立即亏损清仓"}})
-    assert "立即亏损清仓" not in json.dumps(attached,ensure_ascii=False)
+    assert attached[0]["ai_judgement"]["judgement"] == "立即亏损清仓"
+    assert attached[0]["ai_judgement"]["execution_authority"] is False
+    assert attached[0]["ai_judgement"]["execution_guardrails"]
     assert attached[0]["action_quantity"] is None
 
 
@@ -177,6 +179,8 @@ def test_collect_never_visits_or_requires_watchlist(tmp_path,monkeypatch):
     monkeypatch.setattr(ths_account,"require_login",lambda *args: None)
     monkeypatch.setattr(ths_account.time,"sleep",lambda *args: None)
     monkeypatch.setattr(ths_account,"_collect_tab_snapshot",lambda *args: {"text":"","scroll_complete":True})
+    monkeypatch.setattr(ths_account,"_collect_range_snapshot",lambda *args: {"text":"","scroll_complete":True})
+    monkeypatch.setattr(ths_account,"_collection_consistency",lambda *args: {"status":"PASS"})
     monkeypatch.setattr(ths_account,"_click_tab",lambda *args: None)
     monkeypatch.setattr(ths_account,"_records_from_snapshot",lambda *args: [])
     monkeypatch.setattr(ths_account,"extract_watchlist",lambda *args: (_ for _ in ()).throw(AssertionError("Retired watchlist collector was called")))
@@ -235,7 +239,7 @@ def test_transition_keeps_all_capital_and_does_not_preallocate_unfilled_proceeds
     grids=[advise_grid(None,market(p.code),p,recs[0]["rule_decision"])]
     html=render_html("TEST ONLY",recs,grids,{})
     assert html.index('id="exits"') < html.index('id="targets"')
-    assert "反弹分批卖出" in html and "等待真实卖出回款" in html
+    assert "等待反弹，分批回收资金" in html and "等待真实卖出回款" in html
 
 
 def test_cash_balance_label_is_collected_without_claiming_spendable_cash():

@@ -21,57 +21,92 @@
 {% if t %}<p><strong>{{ t.summary }}</strong></p>
 <dl class="evidence">{% for row in t.evidence %}<dt>{{ row.label }}</dt><dd>{{ row.text }}</dd>{% endfor %}</dl>
 {% if t.signal_close is number %}<small>日线样本{% if t.signal_date %} {{ t.signal_date }}{% endif %} · ¥{{ number(t.signal_close,3) }}</small>{% endif %}
+{% if r.quote_time %}<br><small>实时报价时间 {{ r.quote_time }}；技术指标使用独立日线样本。</small>{% endif %}
+{% if t.overheat_evidence %}<p>过热触发依据：{{ t.overheat_evidence|join('；') }}</p>{% endif %}
 {% if t.status == 'OVERSOLD_RECOVERY' %}<p>前5个样本超卖 {{ number(t.recent_oversold_count5,0) }} 次；RSI6 前值 {{ number(t.previous_rsi6,1) }} → 当前 {{ number(r.rsi6,1) }}。</p>{% endif %}
 {% if t.conflicts %}<ul>{% for text in t.conflicts %}<li>{{ text }}</li>{% endfor %}</ul>{% endif %}
 {% if t.missing_fields %}<p class="muted">缺少指标：{{ t.missing_fields|join('、') }}。</p>{% endif %}
 {% else %}<p>缺少综合依据，需重新分析。</p>{% endif %}
 {% if g.parameter_basis %}<p><span class="label">参数依据</span> {{ g.parameter_basis.note }}</p>{% endif %}
-{% if g.parameter_plan %}<p class="muted">数量来源：买—{{ g.parameter_plan.buy_quantity_source }}；卖—{{ g.parameter_plan.sell_quantity_source }}。</p>{% endif %}
+{% if g.inventory %}<p><span class="label">库存依据</span> {{ g.inventory.note }}</p>{% if g.inventory.rule_source_urls %}<small>{% for url in g.inventory.rule_source_urls %}<a href="{{ url }}" target="_blank" rel="noopener">交易制度来源{{ loop.index }}</a> {% endfor %}</small>{% endif %}{% endif %}
+{% if g.parameter_plan %}<p class="muted">买入草案数量来源：{{ g.parameter_plan.buy_quantity_source }}。</p>{% endif %}
 {% for text in r.rule_decision.execution_constraints|default([]) %}<p class="condition">{{ text }}</p>{% endfor %}
 {% for text in g.specific_notes|default([]) %}<p class="condition">{{ text }}</p>{% endfor %}
 {% if r.quantity and r.sell_policy.status not in ['PENDING_COST_BASIS','PARTIAL_ALLOWED'] %}<p>{{ r.sell_policy.reason }}</p>{% endif %}
 {% if r.investor_note %}<p>备注：{{ r.investor_note }}</p>{% endif %}
+{% if r.ai_judgement and r.ai_judgement.enabled %}<p><span class="label">复核结论</span> {{ r.ai_judgement.judgement }}</p>{% endif %}
 </details>
 {%- endmacro %}
 {% macro conditions(a) -%}
-<p><span class="label">{{ a.buy_label }}</span> {{ a.buy_condition }}</p>
+{% if a.inventory and a.inventory.sellable_quantity is number %}<p><span class="label">可卖量测算</span> {{ a.inventory.settlement.replace('T','T+') }} · {{ number(a.inventory.sellable_quantity,0) }} 份{% if a.inventory.today_buy_quantity is number %} · 今日买入 {{ number(a.inventory.today_buy_quantity,0) }} 份{% endif %}</p>{% endif %}
 {% if a.sell_condition %}<p><span class="label">卖出</span> {{ a.sell_condition }}</p>{% endif %}
+{% if a.sell_quantity %}<p><strong>{{ a.sell_reference_basis }} ¥{{ number(a.sell_reference_price,3) }} · 建议 {{ number(a.sell_quantity,0) }} 份</strong></p>{% endif %}
+{% if a.quantity_basis and a.sell_quantity %}<p class="muted">减持本标的 {{ number(a.quantity_basis.reduction_pct) }}%{% if a.quantity_basis.account_weight_pct is number %} · 本标的占账户 {{ number(a.quantity_basis.account_weight_pct) }}%{% endif %}<br>数量依据：{{ a.quantity_basis.label }}。</p>{% endif %}
+{% if a.condition_plan and a.condition_plan.quantity %}<p class="condition"><strong>条件单配置</strong> {{ a.condition_plan.condition_type }}；股价{{ a.condition_plan.trigger_relation }} ¥{{ number(a.condition_plan.trigger_price,3) }}{% if a.condition_plan.pullback_pct is defined %}，再从实际最高价累计回落 {{ number(a.condition_plan.pullback_pct,2) }}%（保底价触发关闭）{% endif %}，以{{ a.condition_plan.order_price_type }}委托 {{ number(a.condition_plan.quantity,0) }} 份。</p><details><summary>原单替换与成交后处理</summary><ol>{% for step in a.condition_plan.steps %}<li>{{ step }}</li>{% endfor %}</ol><p>触发不等于成交，委托价受当时盘口影响。</p></details>{% endif %}
+{% if a.projected_remaining_quantity is number %}<small>按该参考方案成交后剩余 {{ number(a.projected_remaining_quantity,0) }} 份{% if a.projected_liquidation_floor is number %}，剩余清仓回本价约 ¥{{ number(a.projected_liquidation_floor,3) }}{% endif %}；成交前仅为推演。</small>{% endif %}
+<p{% if a.buy_status == 'BLOCKED' %} class="condition"{% endif %}><span class="label">{{ a.buy_label }}</span> {{ a.buy_condition }}</p>
 {% for text in a.notices %}<p class="condition">{{ text }}</p>{% endfor %}
+{% if a.contingency_plan %}<small>后续复评：{{ a.contingency_plan.brief }}</small>{% if a.contingency_plan.signal_caveat %}<p class="muted">{{ a.contingency_plan.signal_caveat }}</p>{% endif %}{% else %}<small>{{ a.invalidation }}</small>{% endif %}
+{%- endmacro %}
+{% macro sample_time(r) -%}
+{% if r.quote_time %}<small>报价 {{ r.quote_time[11:19] }} · 完整日趋势 {{ number(r.rule_trend_score,0) }}/100（{{ r.signal_date }}）</small>{% endif %}
 {%- endmacro %}
 {% macro parameters(g) -%}
-{% if g.parameter_plan %}{% set p = g.parameter_plan %}
-<div class="table-wrap"><table class="parameters"><thead><tr><th>参数草案</th><th>触发 → 确认</th><th>建议份额</th><th>首笔≈¥</th></tr></thead><tbody>
-<tr><th>买</th><td>{{ signed(p.buy_fall_pct,'−') }} → {{ signed(p.buy_rebound_pct,'+') }}</td><td>{{ number(p.buy_quantity,0) }}</td><td>{{ number(g.first_buy_reference_price,3) }}</td></tr>
-<tr><th>卖</th><td>{{ signed(p.sell_rise_pct,'+') }} → {{ signed(p.sell_pullback_pct,'−') }}</td><td>{{ number(p.sell_quantity,0) }}</td><td>{{ number(g.first_sell_reference_price,3) }}</td></tr>
+{% if g.parameter_plan and not g.final_exit_plan %}{% set p = g.parameter_plan %}
+<details class="settings"><summary>后续网格参数草案 · 不代表本次买卖动作</summary>
+<div class="table-wrap"><table class="parameters"><thead><tr><th>参数草案</th><th>触发 → 确认</th><th>建议份额</th><th>满足档位示例</th></tr></thead><tbody>
+<tr><th>买</th><td>{{ signed(p.buy_fall_pct,'−') }} → {{ signed(p.buy_rebound_pct,'+') }}</td><td>{{ number(p.buy_quantity,0) }}</td><td>{{ number(g.price_plan.buy_confirmation_example if g.price_plan else g.first_buy_reference_price,3) }}</td></tr>
+<tr><th>卖</th><td>{{ signed(p.sell_rise_pct,'+') }} → {{ signed(p.sell_pullback_pct,'−') }}</td><td>{{ number(p.sell_quantity,0) }}</td><td>{{ number(g.price_plan.sell_confirmation_example if g.price_plan else g.first_sell_reference_price,3) }}</td></tr>
 </tbody></table></div><small>基准 ¥{{ number(g.suggested_base_price,3) }}</small>
+{% if g.price_plan %}<p>买入下跌阈值 ¥{{ number(g.price_plan.buy_trigger_price,3) }}；卖出上涨阈值 ¥{{ number(g.price_plan.sell_trigger_price,3) }}。</p><small>{{ g.price_plan.buy_path_note }} {{ g.price_plan.sell_path_note }}</small>{% endif %}
+{% if g.price_plan and g.price_plan.confirmation_price_basis == 'EXTREME_EQUALS_TRIGGER' %}<p class="muted">峰谷恰好等于启动阈值时，理论确认边界：买 ¥{{ g.price_plan.buy_confirmation_theoretical_price }}，卖 ¥{{ g.price_plan.sell_confirmation_theoretical_price }}。表内为首个满足比例的0.001档位；实际峰谷变化后重算。委托价格方式见本次配置，成交价以成交回报为准。</p>{% endif %}
+<p class="condition">{% if g.grid_execution_status == 'DO_NOT_ENABLE' %}这组草案当前不具备整单启用条件。{% else %}启用前须完成资金、可卖库存和累计占用核验。{% endif %}双向参数不能用单侧暂停执行。</p>
+{{ limits(g) }}</details>
 {% endif %}
-{{ limits(g) }}
 {%- endmacro %}
 <header><div><div class="eyebrow">ETFMATE / ACCOUNT REVIEW</div><h1>账户行动报告</h1></div><div class="muted">数据批次 · {{ date }}<br>不追加也不转出 · 管理现有持仓 · 逐步迁移</div></header>
 <nav aria-label="报告导航"><a href="#account">账户总览</a><a href="#exits">现有持仓管理</a><a href="#targets">目标组合与资金承接</a></nav>
 <section id="account"><div class="section-title"><span>01</span><h2>账户总览</h2></div>
+{% if data.get('preview_note') %}<p class="condition"><strong>{{ data.preview_note }}</strong></p>{% endif %}
+<p><strong>{{ execution_review.label }}</strong></p><p class="muted">{{ execution_review.boundary }}</p>
 <p class="direction">{{ overview.direction }}</p><p class="condition">{{ overview.position_note }}</p>
-<div class="stats"><div class="stat"><span class="label">账户总资产 / 元</span><b>{{ number(overview.total_asset) }}</b></div><div class="stat"><span class="label">实际可用现金 / 元</span><b>{{ number(overview.available_cash) if overview.available_cash is number else '未提供可用金额' }}</b></div><div class="stat"><span class="label">当前持仓 → 最终目标</span><b>{{ overview.held_count }} → 4只</b></div><div class="stat"><span class="label">过渡持仓 / 只</span><b>{{ overview.legacy_count }}</b></div></div>
+{% set funding = execution_review.funding %}
+<div class="stats"><div class="stat"><span class="label">账户总资产 / 元</span><b>{{ number(overview.total_asset) }}</b></div><div class="stat"><span class="label">账户现金 / 元</span><b>{{ number(overview.cash) }}</b></div><div class="stat"><span class="label">门槛内买入额度 / 元</span><b>{{ number(funding.buy_capacity_under_cap) }}</b></div><div class="stat"><span class="label">当前持仓 → 最终目标</span><b>{{ overview.held_count }} → 4只</b></div></div>
 <p class="muted">{{ overview.cash_note }}过渡期可以超过5只，不为数量达标亏损清仓。</p>
-<div class="tasks"><strong>优先事项 ×3</strong><ol>{% for task in overview.tasks %}<li>{{ task }}</li>{% endfor %}</ol></div>
+{% if funding.required_net_sell_to_cap is number and funding.required_net_sell_to_cap > 0 %}<p>按本次资产价格，净卖回约 <strong>¥{{ number(funding.required_net_sell_to_cap) }}</strong> 后才回到新增买入门槛；这不是要求立即卖足的金额。每笔成交后重算，已有现金不重复加上历史卖出回款。</p>{% endif %}
+<details class="decision-review"><summary>计划边界与尚待确定项</summary><p>{{ decision_review.position_threshold.note }}</p><p>{{ decision_review.liquidation_constraint.note }}</p><p>{{ decision_review.quantity_policy.note }} {{ decision_review.cost_assumptions.note }}</p><p>{{ decision_review.migration.note }}</p><ul>{% for gap in decision_review.unresolved_policies %}<li>{{ gap.label }}：{{ gap.impact }}</li>{% endfor %}</ul><p>{{ decision_review.partial_review_boundary }}</p></details>
+{% if decision_review.sell_scenarios %}<details><summary>当前卖出候选 · 对账户仓位的独立影响</summary><p>{{ decision_review.scenario_assumptions }}</p><div class="table-wrap"><table><thead><tr><th>标的 / 份额</th><th>假设回款</th><th>成交后仓位</th><th>距离门槛仍需净卖回</th></tr></thead><tbody>{% for scenario in decision_review.sell_scenarios %}<tr><td>{{ scenario.code }} / {{ number(scenario.quantity,0) }}</td><td>¥{{ number(scenario.estimated_proceeds) }}</td><td>{{ number(scenario.projected_position_pct) }}%</td><td>¥{{ number(scenario.remaining_net_sell_to_threshold) }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+{% if funding.conditions %}<details><summary>全部条件单共用资金 · 首轮触发压力测算</summary><p>按原网格首次到阈值后反弹、分批建仓按门槛价估算：合计 ¥{{ number(funding.first_cycle_estimated_cash) }}，比现金多 ¥{{ number(funding.shortfall) }}。这是名义情景，不是冻结金额或保证成交价；监控单可能连续触发，不能以首轮买得起代替全程预算。</p><div class="table-wrap"><table><thead><tr><th>条件单</th><th>单笔量</th><th>名义资金</th><th>具体限制</th></tr></thead><tbody>{% for row in funding.conditions if row.active_buy %}<tr><td>{{ row.code }} · {{ row.name }}</td><td>{{ number(row.buy_quantity,0) }}</td><td>¥{{ number(row.first_cycle_estimated_cash) }}</td><td>{{ row.limitations|join('；') }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+<div class="tasks"><strong>本批次优先事项</strong><ol>{% for task in execution_review.tasks %}<li>{{ task }}</li>{% endfor %}</ol></div>
+{% if execution_review.live_order_conflicts %}<details><summary>需调整的监控中条件单 · {{ execution_review.live_order_conflicts|length }} 条</summary><p>先停用冲突原单，再建立独立卖出条件计划；平台不支持单侧暂停时按整单处理。若原单已经触发报单，等该笔成交或撤单确认后再启用替代单。报告本身未更改平台状态。</p><table><thead><tr><th>标的 / 类型</th><th>采集状态与原因</th></tr></thead><tbody>{% for row in execution_review.live_order_conflicts %}<tr><td>{{ row.code }} · {{ row.type }}</td><td>{{ row.status }}；{{ row.reason }}</td></tr>{% endfor %}</tbody></table></details>{% endif %}
+{% set submitted = execution_review.submitted_orders %}
+{% if execution_review.condition_review_items %}<details><summary>监控条件待核对 · {{ execution_review.condition_review_items|length }} 条</summary><p>这些条件尚未证明与本批次计划冲突；先核对原单类型、标识和重叠范围，再决定沿用或替换。</p><ul>{% for item in execution_review.condition_review_items %}<li>{{ item.code }} · {{ item.type }}：{{ item.reason }}</li>{% endfor %}</ul></details>{% endif %}
+<details><summary>{{ submitted.label }}</summary><p>{{ submitted.note }}</p>{% if submitted.captured_at %}<p class="muted">委托页读取时刻：{{ submitted.captured_at }}</p>{% endif %}
+{% if submitted.observed_count is number %}<p class="muted">已读取 {{ submitted.observed_count }} 条委托记录，其中所见历史失败 {{ number(submitted.observed_historical_failure_count,0) }} 条；历史失败和已成交记录不计为当前冻结资金。</p>{% endif %}
+{% if submitted.failure_summary %}<p>{{ submitted.failure_summary.note }}</p><ul>{% for category in submitted.failure_summary.categories %}<li>{{ category.label }}：{{ category.count }} 条{% if category.examples %}；例：{{ category.examples[0].code }} · {{ category.examples[0].order_date }}<br><small>{{ category.examples[0].evidence_fields.values()|join('；') }}</small>{% endif %}</li>{% endfor %}</ul>{% endif %}
+{% set exceptions = submitted.today_open_orders + submitted.historical_unresolved_orders + submitted.unknown_orders %}
+{% if exceptions %}<div class="table-wrap"><table><thead><tr><th>标的 / 方向</th><th>触发时间</th><th>数量 / 委托价</th><th>实际显示与解释</th></tr></thead><tbody>{% for row in exceptions %}<tr><td>{{ row.code }} · {{ row.side }}</td><td>{{ row.date }} {{ row.time }}</td><td>{{ number(row.quantity,0) }} / ¥{{ number(row.price,3) }}</td><td>{{ row.status }}{% if row.detail_status %}；明细：{{ row.detail_status }}{% endif %}。{{ row.note }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+</details>
+{% if execution_review.follow_up_policy %}{% set followup = execution_review.follow_up_policy %}<details><summary>部分成交、失败与未成交后如何处理</summary>{% for key, label in [('partial_fill','部分成交'),('rejected','委托失败'),('unfilled','尚未成交'),('replacement','原单替换'),('revalidation','计划重评')] %}{% set item = followup[key] %}<p><strong>{{ label }}</strong> {{ item.actions|join('；') }}</p>{% endfor %}</details>{% endif %}
 {% if overview.pair %}<div class="pair"><strong>成长／价值：逐步建仓期</strong><div class="bar" aria-label="目标：成长40%，价值60%"><span style="width:40%"></span></div><p>目标组内市值：成长 40% · 价值 60%</p><p>{% if overview.pair.total_market_value > 0 %}当前：成长 {{ number(overview.pair.current_weights['159259'] * 100 if overview.pair.current_weights['159259'] is not none else none,1) }}% · 价值 {{ number(overview.pair.current_weights['159263'] * 100 if overview.pair.current_weights['159263'] is not none else none,1) }}%{% else %}当前尚未建仓{% endif %}</p>{% if overview.pair.dip_buy_priority %}<p>优先低吸：{{ overview.pair.dip_buy_priority }}；回落后复评。</p>{% endif %}<small>{{ overview.pair.note }}</small></div>{% endif %}
 </section>
 <section id="exits"><div class="section-title"><span>02</span><h2>现有持仓管理与逐步退出</h2></div><p>部分卖出可低于成本；成交后重算净投入，最终清仓须回本。回补≤已卖量，且≤实际分配回款。</p>
 {% if exits %}<div class="cards">{% for r in exits %}{% set g = grids.get(r.code,{}) %}{% set a = action_plans[r.code] %}
 <article class="card"><h3><span class="code">{{ r.code }}</span>{{ r.name }}</h3>
-<p class="action">{{ a.headline }}</p><p>¥{{ number(r.last_price,3) }} · 持{{ number(r.quantity,0) }} · 市值 ¥{{ number(r.market_value) }}</p>
-{{ parameters(g) }}
+<p class="action">{{ a.headline }}</p><p>¥{{ number(r.last_price,3) }} · 持{{ number(r.quantity,0) }}{% if r.pnl_pct is number %} · 账本盈亏 {{ '%+.2f'|format(r.pnl_pct) }}%{% endif %}</p>
+{{ sample_time(r) }}
 {{ conditions(a) }}
-{% if g.candidate_sell_quantity %}<p>反弹分批卖出：{{ number(g.candidate_sell_quantity,0) }}{% if g.conditional_buyback_quantity %} → 回补≤{{ number(g.conditional_buyback_quantity,0) }}{% else %} · 暂不回补{% endif %}<br><small>等待真实卖出回款；此计划另行执行。</small></p>{% endif %}
 <p>成本≈¥{{ number(r.cost_price,3) }} · 清仓回本价 {% if r.sell_policy.liquidation_floor is number %}¥{{ number(r.sell_policy.liquidation_floor,3) }}{% else %}待核验净投入{% endif %}</p>
 {% if r.candidate_liquidation_quantity %}<p>清仓候选 {{ number(r.candidate_liquidation_quantity,0) }}；另核可卖量与限价。</p>{% endif %}
+{{ parameters(g) }}
 {{ rationale(r,g) }}</article>{% endfor %}</div>{% else %}<p class="empty">无过渡持仓。</p>{% endif %}</section>
 <section id="targets"><div class="section-title"><span>03</span><h2>目标组合与资金承接</h2></div>
 <p class="muted">旧仓回补＋周转预留优先；目标组合仅用已核实余款，分批低吸。未成交回款不计可用资金。</p>
 <div class="cards">{% for r in targets %}{% set g = grids.get(r.code,{}) %}{% set a = action_plans[r.code] %}<article class="card"><div class="role">{{ r.strategy_label }}</div><h3><span class="code">{{ r.code }}</span>{{ r.name }}</h3>
 <p class="action">{{ a.headline }}</p><p>¥{{ number(r.last_price,3) }} · {% if r.quantity is number and r.quantity > 0 %}持{{ number(r.quantity,0) }}{% if r.pnl_pct is number %} · 盈亏 {{ '%+.2f'|format(r.pnl_pct) }}%{% endif %}{% else %}未持仓{% endif %}</p>
-{{ parameters(g) }}
+{{ sample_time(r) }}
 {{ conditions(a) }}
+{{ parameters(g) }}
 {{ rationale(r,g) }}</article>{% endfor %}</div>
 </section>
 

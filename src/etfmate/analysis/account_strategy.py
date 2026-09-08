@@ -6,7 +6,12 @@ from typing import Any
 
 from etfmate.storage.models import Position
 
-ANALYSIS_CONTRACT = "etf_account_transition_v7"
+ANALYSIS_CONTRACT = "etf_account_transition_v10"
+USER_ACCOUNT_FACTS = {
+    "source": "USER_CONFIRMED", "confirmed_on": "2026-09-08",
+    "no_external_cash_flows": True, "no_manual_orders": True,
+    "auto_sync_fills": True, "execution_channel": "CONDITION_ORDERS_ONLY",
+}
 FUNDING_PRIORITY = "LEGACY_RECOVERY_FIRST"
 FUNDING_PRIORITY_NOTE = "现有资金优先用于待退出ETF的回本管理；先安排合理的回补与周转预留，目标组合仅使用之后确认剩余的可用资金。未成交回款不能预支，资金优先不等于无条件补仓。"
 TARGETS = {
@@ -46,13 +51,14 @@ def account_overview(recommendations: list[dict], summary: dict | None = None) -
     totals = [p.get("total_position_pct") for p in portfolios if p.get("position_pct_confidence") == "high"]
     totals = [value for value in totals if isinstance(value, (int, float)) and isfinite(value)]
     total = max(totals) if totals else None
-    position_note = (f"账户仓位 {total:.2f}%，已达80%保护线：本批次不安排新增买入或回补，部分卖出仍可单独评估。"
+    position_note = (f"账户仓位 {total:.2f}%，已达80%新增买入门槛：本批次不安排新增买入或回补，部分卖出仍可单独评估。"
                      if total is not None and total >= 80 else
-                     f"账户仓位 {total:.2f}%；买入份额仍需核实可用资金与累计占用。" if total is not None else
+                     f"账户仓位 {total:.2f}%；买入计划共用账户现金，按新增买入门槛与条件单预算统一分配。" if total is not None else
                      "账户仓位口径未确认，买入份额需核实可用资金与累计占用。")
     return {"held_count": len(held), "target_count": len(TARGETS), "max_target_count": 5,
             "legacy_count": len(legacy), "market_value": market_value,
-            "total_asset": asset, "available_cash": summary.get("available_cash"),
+            "total_asset": asset, "available_cash": summary.get("available_cash"), "cash": summary.get("cash"),
+            "user_account_facts": dict(USER_ACCOUNT_FACTS),
             "position_note": position_note, "total_position_pct": total,
             "external_cash_flow_policy": "NO_DEPOSITS_NO_WITHDRAWALS",
             "funding_priority": FUNDING_PRIORITY,

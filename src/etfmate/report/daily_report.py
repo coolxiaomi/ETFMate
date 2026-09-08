@@ -10,17 +10,25 @@ def render_html(
 ) -> str:
     from etfmate.analysis.account_strategy import account_overview, TARGETS
     from etfmate.analysis.action_plan import describe_action_plan
+    from etfmate.analysis.execution_review import build_execution_review
+    from etfmate.analysis.decision_review import build_decision_review
     data = data_completeness or {}
     overview = account_overview(recommendations, data.get("account_summary"))
     grids = {item["code"]: item for item in grid_advices}
+    plans = {r["code"]: describe_action_plan(r, grids.get(r["code"], {})) for r in recommendations}
+    review = build_execution_review(recommendations, grid_advices, data.get("conditions"),
+                                    data.get("funding_plan"), data.get("submitted_orders"))
+    decision_review = data.get("decision_review") or build_decision_review(
+        recommendations, grid_advices, data.get("account_summary"), data.get("funding_plan"))
     targets = sorted([r for r in recommendations if r.get("code") in TARGETS],
                      key=lambda r: list(TARGETS).index(r["code"]))
     exits = [r for r in recommendations if r.get("code") not in TARGETS]
-    exits.sort(key=lambda r: (not bool((r.get("sell_policy") or {}).get("sell_allowed")), -(r.get("market_value") or 0)))
+    priority = {"LIQUIDATION_REVIEW": 0, "CURRENT_PARTIAL_REVIEW": 1, "REVIEW_PATH": 2}
+    exits.sort(key=lambda r: (priority.get(plans[r["code"]]["sell_status"], 3), -(r.get("market_value") or 0)))
     return _template_env().get_template("account_report.html").render(
         date=date, overview=overview, targets=targets, exits=exits, grids=grids,
-        data=data, trade_review=trade_review,
-        action_plans={r["code"]: describe_action_plan(r, grids.get(r["code"], {})) for r in recommendations},
+        data=data, trade_review=trade_review, execution_review=review,
+        action_plans=plans, decision_review=decision_review,
     )
 
 

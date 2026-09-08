@@ -23,6 +23,8 @@ def decide_position(
     held = bool(position and position.quantity > 0)
     current = position.position_pct / 100 if held and position.position_pct is not None else None
     overheat = _trend_overheat_level(market, trend)
+    overheat_evidence = _trend_overheat_evidence(market, trend, overheat)
+    legacy_exit = assess_legacy_exit(position, market, technical, overheat, overheat_evidence) if role["role"] == "LEGACY_EXIT" else None
     high_risk = trend["score"] < 45 or "全部" in filters["blocked_actions"] or overheat == "SEVERE_OVERHEATED"
     blocked = set(filters["blocked_actions"])
     reasons = []
@@ -37,19 +39,24 @@ def decide_position(
     if high_risk:
         blocked.add("买入")
         risks.append("趋势或行情风险较高，暂停新增投入；不据此自动亏损清仓。")
-        execution_constraints.append(f"风险限制：趋势分{trend['score']:.0f}/100" + ("，严重过热。" if overheat == "SEVERE_OVERHEATED" else "。"))
+        risk_detail = "严重过热触发：" + "；".join(overheat_evidence) if overheat == "SEVERE_OVERHEATED" else ("低于45分风险门槛" if trend["score"] < 45 else "行情交易条件受限")
+        execution_constraints.append(f"风险限制：趋势分{trend['score']:.0f}/100；{risk_detail}。")
     if role["role"] == "LEGACY_EXIT":
         action, state = "持有并做波动改善，反弹分批退出", "MANAGE_EXISTING"
         if high_risk or technical["buy_gate"] == "WAIT_CONFIRMATION":
             action = "暂停回补，等待反弹分批回收资金"
+        if held and legacy_exit["status"] == "CURRENT_PARTIAL_REVIEW":
+            action = "当前评估分批退出，清仓另行核验"
         if not held:
             blocked.update({"买入", "加仓", "提高网格买入侧"})
             action, state = "停用已退出标的计划", "RETIRE_GRID"
         elif policy["sell_allowed"]:
             action, state = "盈利或回本清仓候选，执行前复核", "LIQUIDATE_CONDITIONAL"
+            blocked.update({"买入", "加仓", "提高网格买入侧"})
         reasons.append("最终退出不代表现在只等清仓：继续根据行情提供持有、波动改善、反弹分批卖出与最终退出建议。")
         if held:
-            reasons.append("回补仅是先卖后买、份额不超过已卖份额的条件方案，须核实实际回款；不自动扩大旧仓。")
+            reasons.append("本轮最终退出计划不安排回补；清仓回款进入账户资金池再分配。" if state == "LIQUIDATE_CONDITIONAL" else
+                           "回补仅是先卖后买、份额不超过已卖份额的条件方案，须核实实际回款；不自动扩大旧仓。")
             risks.append(policy["reason"] + "清仓核验缺口不阻断部分卖出的行情与数量候选。")
     else:
         action, state = "等待回落，分批建仓", "WAIT_DIP"
@@ -60,7 +67,7 @@ def decide_position(
             reasons.append("跌多分批买入，可用较小涨幅部分卖出；买卖触发不对称不等于必然净增仓。")
         if "买入" in blocked or "全部" in blocked:
             action, state = "暂停新增投入，等待复核", "WAIT_BUY_REVIEW"
-        risks.append("角色预算、实际可用现金及全部网格预留未统一核实，暂不输出可直接下单的买入份额。")
+        risks.append("目标买入与旧仓管理共用账户资金计划，数量不能超过新增买入额度或重复分配现有现金。")
     pair = pair_progress(positions) if role["role"].startswith("PAIR_") else None
     if pair:
         reasons.insert(0, pair["note"])
@@ -94,6 +101,7 @@ def decide_position(
         "trend_tags": trend["tags"], "trend_scores": trend["scores"],
         "trend_indicators": trend["indicators"], "trend_data_sufficient": trend["data_sufficient"],
         "trend_overheat_level": overheat,
+        "trend_overheat_evidence": overheat_evidence, "legacy_exit_assessment": legacy_exit,
         "trend_trade_mode": "低频条件计划", "execution_mode": "CONDITIONAL_PLAN",
         "risk_level": "HIGH" if high_risk else "MEDIUM", "filter_status": filters["status"],
         "blocked_actions": sorted(blocked | ({"清仓"} if not policy["sell_allowed"] else set())),
@@ -157,13 +165,18 @@ def _trade_filters(market: MarketSnapshot, position: Position | None, category: 
 
 
 def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
-    close = _num_or_none(market.last_price)
+    close = _num_or_none(market.signal_close)
+    if close is None:
+        close = _num_or_none(market.last_price)
     ma5 = _num_or_none(market.ma5)
     ma10 = _num_or_none(market.ma10)
     ma20 = _num_or_none(market.ma20)
     ma5_slope_3 = _num_or_none(market.ma5_slope_3)
     vol_ratio_1_5 = _num_or_none(market.vol_ratio_1_5)
     vol_ratio_5_20 = _num_or_none(market.vol_ratio_5_20)
+    incomplete_daily = market.signal_is_complete is False or market.signal_volume_basis in {"intraday_daily", "unknown"}
+    if incomplete_daily:
+        vol_ratio_1_5 = vol_ratio_5_20 = None
     boll_position = _num_or_none(market.boll_position)
     bias5 = _num_or_none(market.bias5_ratio)
     bias12 = _num_or_none(market.bias12)
@@ -280,6 +293,8 @@ def _trend_score(market: MarketSnapshot) -> dict[str, Any]:
         "short_trend_score": score,
     }
     indicators = {
+        "signal_close": close, "signal_date": market.signal_date,
+        "price_basis": "DAILY_SIGNAL" if market.signal_close is not None else "QUOTE_FALLBACK",
         "ma5_slope_3": ma5_slope_3,
         "vol_ratio_1_5": vol_ratio_1_5,
         "vol_ratio_5_20": vol_ratio_5_20,
@@ -325,7 +340,9 @@ def _trend_overheat_level(market: MarketSnapshot, trend: dict[str, Any]) -> str:
     bias6 = _num_or_none(market.bias6)
     bias12 = _num_or_none(indicators.get("bias12")) or _num_or_none(market.bias12)
     bias24 = _num_or_none(indicators.get("bias24")) or _num_or_none(market.bias24)
-    close = _num_or_none(market.last_price)
+    close = _num_or_none(market.signal_close)
+    if close is None:
+        close = _num_or_none(market.last_price)
     boll_upper = _num_or_none(market.boll_upper)
 
     severe = any(
@@ -351,6 +368,64 @@ def _trend_overheat_level(market: MarketSnapshot, trend: dict[str, Any]) -> str:
         )
     )
     return "OVERHEATED" if overheated else "NONE"
+
+
+def _trend_overheat_evidence(market: MarketSnapshot, trend: dict[str, Any], level: str) -> list[str]:
+    """Name the actual threshold, rather than implying every indicator is extreme."""
+    if level == "NONE":
+        return []
+    severe = level == "SEVERE_OVERHEATED"
+    indicators = trend.get("indicators") or {}
+    def value(key: str, fallback: Any) -> float | None:
+        number = _num_or_none(indicators.get(key))
+        return number if number is not None else _num_or_none(fallback)
+    close = _num_or_none(market.signal_close)
+    if close is None:
+        close = _num_or_none(market.last_price)
+    upper = _num_or_none(market.boll_upper)
+    evidence = []
+    for number, threshold, label, scale in (
+        (value("boll_position", market.boll_position), 1.0 if severe else .95, "布林位置", 100),
+        (value("rsi6", market.rsi6), 85 if severe else 75, "RSI6", 1),
+        (_num_or_none(market.bias6), 6 if severe else float("inf"), "BIAS6", 1),
+        (value("bias12", market.bias12), 10 if severe else 7, "BIAS12", 1),
+        (value("bias24", market.bias24), 12 if severe else 8, "BIAS24", 1),
+        (value("bias5", market.bias5_ratio), float("inf") if severe else .06, "BIAS5", 100),
+    ):
+        if number is not None and number >= threshold:
+            suffix = "" if label == "RSI6" else "%"
+            evidence.append(f"{label}{number * scale:.2f}{suffix} ≥ {threshold * scale:g}{suffix}")
+    if close is not None and upper is not None and upper > 0:
+        if severe and close > upper:
+            evidence.append(f"指标样本价{close:.3f} > 布林上轨{upper:.3f}")
+        elif not severe and close >= upper * .995:
+            evidence.append(f"指标样本价{close:.3f}接近布林上轨{upper:.3f}")
+    return evidence
+
+
+def assess_legacy_exit(position: Position | None, market: MarketSnapshot,
+                       technical: dict[str, Any], overheat: str = "NONE",
+                       overheat_evidence: list[str] | None = None) -> dict[str, Any]:
+    """Choose exit timing; page cost is a reference and never liquidation proof."""
+    cost = _num_or_none(position.cost_price) if position else None
+    price = _num_or_none(market.last_price)
+    held = bool(position and isfinite(position.quantity) and position.quantity > 0)
+    valid = held and price is not None and price > 0
+    recovered = bool(valid and cost is not None and cost > 0 and price >= cost)
+    hot = technical.get("status") == "OVERHEATED" or overheat in {"OVERHEATED", "SEVERE_OVERHEATED"}
+    reasons = []
+    if recovered:
+        reasons.append("行情参考价已达到页面成本，当前可评估分批回收；页面成本不证明本轮清仓已回本")
+    if hot:
+        reasons.append("当前技术位置偏热，优先评估部分退出，不额外要求现价再上涨")
+    status = "NO_POSITION" if not held else "WAIT_DATA" if not valid else "CURRENT_PARTIAL_REVIEW" if recovered or hot else "WAIT_REBOUND"
+    return {
+        "status": status, "page_cost_recovered": recovered,
+        "price_cost_return_pct": round((price / cost - 1) * 100, 4) if valid and cost is not None and cost > 0 else None,
+        "reference_price": price if valid else None, "cost_price_reference": cost,
+        "overheat_evidence": list(overheat_evidence or technical.get("overheat_evidence") or []),
+        "reason": "；".join(reasons) if reasons else "等待反弹后评估部分回收；最终清仓另行核验" if valid else "等待有效持仓与行情证据",
+    }
 
 
 def _portfolio_state(position: Position | None, positions: list[Position], category: str) -> dict[str, Any]:

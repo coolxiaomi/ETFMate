@@ -45,7 +45,9 @@ def test_legacy_ai_judgement_is_not_reused_after_evidence_removal():
     result = normalize_host_ai_judgements(old, recs)
     assert result["510300"]["enabled"] is False
     assert "重新复核" in result["510300"]["judgement"]
-    current = {**old, "review_contract": AI_REVIEW_CONTRACT}
+    from test_ai_review_gate import _review_payload
+    review_input = build_ai_review_input(recs, [], run_id="TEST", review_id="review")
+    current = _review_payload(review_input)
     assert normalize_host_ai_judgements(current, recs)["510300"]["enabled"] is True
 
 
@@ -53,11 +55,13 @@ def test_ai_attach_preserves_current_contract_and_rejects_old_input(tmp_path):
     from etfmate.cli import run_ai_attach
     from etfmate.storage.repository import write_json
 
-    run_id = "20260907-120000"
-    recs = [{"code": "510300"}]
-    write_json(tmp_path / "data/raw/market" / run_id / "analysis.json", {"analysis_contract": AI_REVIEW_CONTRACT, "recommendations": recs})
+    from pytest import MonkeyPatch
+    from test_ai_review_gate import _prepare_analysis, _review_payload
+    with MonkeyPatch.context() as patch:
+        run_id, analysis, review_input = _prepare_analysis(tmp_path, patch)
+    recs = analysis["recommendations"]
     source = tmp_path / "review.json"
-    payload = {"review_contract": AI_REVIEW_CONTRACT, "items": [{"code": "510300", "judgement": "基于量价复核", "confidence": 60}]}
+    payload = _review_payload(review_input)
     write_json(source, payload)
     run_ai_attach(tmp_path, run_id, source)
     assert load_host_ai_judgements(tmp_path, run_id, recs)["510300"]["enabled"] is True

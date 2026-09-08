@@ -142,14 +142,16 @@ def test_history_uses_previous_five_rows_and_is_causal():
 
 
 def test_snapshot_carries_daily_evidence_separately_from_quote(monkeypatch):
-    df = pd.DataFrame({"datetime": [f"d{i}" for i in range(80)], "close": [1+i*.001 for i in range(80)],
+    df = pd.DataFrame({"datetime": pd.bdate_range(end="2026-09-07", periods=80).strftime("%Y-%m-%d"), "close": [1+i*.001 for i in range(80)],
                        "open": [1]*80, "high": [1.1]*80, "low": [.9]*80,
                        "volume": [1000]*80, "amount": [1e8]*80})
-    monkeypatch.setattr(providers, "tencent_quote", lambda codes: {codes[0]: {"last_price": 2}})
+    monkeypatch.setattr(providers, "tencent_quote", lambda codes: {codes[0]: {"last_price": 2, "quote_time": "2026-09-08T10:38:54+08:00"}})
     monkeypatch.setattr(providers, "baidu_daily_kline", lambda code: df)
+    monkeypatch.setattr(providers, "tencent_daily_kline", lambda code: df.assign(volume=lambda frame: frame.volume / 100))
     m = providers.build_market_snapshot("510500")
     assert m.signal_close == df.close.iloc[-1] and m.last_price == 2
-    assert m.signal_date == "d79"
+    assert m.signal_date == "2026-09-07"
+    assert m.signal_is_complete is True
     assert m.previous_rsi6 == 100 and m.recent_oversold_count5 == 0
 
 
@@ -162,7 +164,7 @@ def test_report_keeps_per_symbol_evidence_without_public_explanations():
     assert "单位：份、¥、%" not in html
     assert "待核验净投入" in html
     assert html.count("BIAS5/12/24") == 2 and html.count("RSI6/14") == 2
-    assert html.count("当日量/5日均量") == 2
+    assert html.count("样本日量/5日均量") == 2
     assert "最终退出不代表现在只等清仓" not in html
     assert "即使清仓成本暂未核实" not in html
     assert "前5个样本超卖 2 次" in html

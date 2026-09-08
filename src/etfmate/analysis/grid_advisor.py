@@ -4,10 +4,15 @@ from typing import Any
 
 from etfmate.storage.models import GridConfig, MarketSnapshot, Position
 from etfmate.analysis.sell_policy import assess_sell_policy
+from etfmate.analysis.price_ticks import (
+    CONFIRMATION_PRICE_BASIS, PRICE_TICK, confirmation_price, grid_trigger_price,
+)
 
 def advise_grid(
     grid: GridConfig | None, market: MarketSnapshot, position: Position | None = None,
     rule_decision: dict[str, Any] | None = None,
+    inventory: dict[str, Any] | None = None,
+    funding: dict[str, Any] | None = None,
 ) -> dict:
     from math import isfinite, ceil
     from etfmate.analysis.account_strategy import role_for
@@ -41,7 +46,11 @@ def advise_grid(
         "buyback_quantity_note": "暂不安排回补",
         "parameter_plan": None, "grid_execution_status": "DO_NOT_ENABLE",
         "technical_assessment": technical, "specific_notes": [],
+        "inventory": inventory or {},
+        "final_exit_plan": rule.get("position_action") == "LIQUIDATE_CONDITIONAL",
         "grid_execution_note": "暂不启用整单：缺少有效参数",
+        "price_plan": None, "partial_sell_plan": {"status": "WAIT_DATA", "reference_price": None,
+            "candidate_quantity": None, "reference_basis": None, "reason": "等待有效行情与库存", "sell_policy": None},
     }
     legacy = role["role"] == "LEGACY_EXIT"
     if legacy and not held:
@@ -53,6 +62,7 @@ def advise_grid(
                       buy_quantity_note="旧网格停止新增买入", sell_quantity_note="未持仓",
                       grid_execution_note="停用整单：旧标的已无持仓",
                       reasons=["旧持仓不再补仓摊低成本；旧网格不能自动清空库存。", policy["reason"]])
+        advice["partial_sell_plan"].update(status="NO_PARTIAL_INVENTORY", reason="无剩余持仓")
         return advice
     atr = market.atr14_pct
     if atr is None or not isfinite(atr) or atr <= 0 or not isfinite(market.last_price) or market.last_price <= 0:
@@ -90,9 +100,11 @@ def advise_grid(
     if fall >= 100:
         advice.update(action="等待波动数据复核", reasons=["综合修正后下跌间距达到100%，不生成无效参数。"])
         return advice
-    base = grid.base_price if grid and grid.base_price and isfinite(grid.base_price) and grid.base_price > 0 else market.last_price
+    valid_live_base = bool(grid and grid.base_price and isfinite(grid.base_price) and grid.base_price > 0)
+    base = grid.base_price if valid_live_base else market.last_price
     if legacy:
         base = market.last_price  # A new staged-exit proposal, not a change to the live grid.
+    base_source = "CURRENT_QUOTE_NEW_PLAN" if legacy or not valid_live_base else "EXISTING_GRID_REFERENCE"
     # Never silently rebase a live grid. Material drift needs manual review.
     stale_base = abs(market.last_price / base - 1) * 100 > 2 * max(fall, rise)
     reserve = max(100, ceil(held * 0.5 / 100) * 100) if held > 0 else 100
@@ -104,6 +116,9 @@ def advise_grid(
     valid_sell = raw_sell is not None and isfinite(raw_sell) and raw_sell >= 100 and raw_sell % 100 == 0
     sell_draft = int(raw_sell) if valid_sell else max(100, int(held * 0.25 // 100) * 100)
     sell = int(min(sell_draft, max(0, held - reserve)) // 100) * 100
+    if inventory is not None:
+        eligible = inventory.get("sellable_quantity")
+        sell = int(min(sell, eligible) // 100) * 100 if eligible is not None else 0
     raw_buy = (grid.buy_quantity if grid and grid.buy_quantity is not None else grid.order_quantity if grid else None)
     valid_buy = raw_buy is not None and isfinite(raw_buy) and raw_buy >= 100 and raw_buy % 100 == 0
     buy_draft = int(raw_buy) if valid_buy else 100
@@ -119,21 +134,67 @@ def advise_grid(
     blocked = set(rule.get("blocked_actions") or [])
     total = (rule.get("portfolio") or {}).get("total_position_pct")
     buy_blocked = bool(blocked & {"全部", "买入", "加仓"}) or rule.get("high_risk") or rule.get("risk_level") == "HIGH" or (total is not None and total >= 80) or technical["buy_gate"] == "WAIT_CONFIRMATION"
-    policy = assess_sell_policy(position, market, sell_price=base * (1 + rise / 100) * (1 - pullback / 100),
+    buy_trigger = grid_trigger_price(base, fall, "buy")
+    sell_trigger = grid_trigger_price(base, rise, "sell")
+    if buy_trigger <= 0:
+        advice.update(action="等待价格数据复核", reasons=["下跌阈值不足一个有效交易档位，不能生成价格计划。"])
+        return advice
+    buy_theoretical, buy_tick = confirmation_price(buy_trigger, rebound, "buy")
+    sell_theoretical, sell_tick = confirmation_price(sell_trigger, pullback, "sell")
+    if sell_tick <= 0:
+        advice.update(action="等待价格数据复核", reasons=["回落确认价不足一个有效交易档位，不能生成价格计划。"])
+        return advice
+    policy = assess_sell_policy(position, market, sell_price=float(sell_tick),
                                 sell_quantity=sell if sell else None)
+    price_plan = {
+        "base_price": base, "base_source": base_source,
+        "price_tick": float(PRICE_TICK), "confirmation_price_basis": CONFIRMATION_PRICE_BASIS,
+        "buy_trigger_price": round(buy_trigger, 6),
+        "buy_confirmation_theoretical_price": format(buy_theoretical, "f"),
+        "buy_confirmation_tick_price": float(buy_tick),
+        "buy_confirmation_example": float(buy_tick),
+        "sell_trigger_price": round(sell_trigger, 6),
+        "sell_confirmation_theoretical_price": format(sell_theoretical, "f"),
+        "sell_confirmation_tick_price": float(sell_tick),
+        "sell_confirmation_example": float(sell_tick),
+        "buy_path_status": "TRIGGER_ZONE_PATH_UNVERIFIED" if market.last_price <= buy_trigger else "WAIT_TRIGGER_PATH_UNVERIFIED",
+        "sell_path_status": "TRIGGER_ZONE_PATH_UNVERIFIED" if market.last_price >= sell_trigger else "WAIT_TRIGGER_PATH_UNVERIFIED",
+        "path_evidence": "SNAPSHOT_ONLY",
+        "buy_path_note": "先到下跌触发价，再从实际最低价反弹；单次快照无法证明已触发或成交。",
+        "sell_path_note": "先到上涨触发价，再从实际最高价回落；单次快照无法证明已触发或成交。",
+    }
+    from etfmate.analysis.rule_engine import assess_legacy_exit
+    legacy_exit = rule.get("legacy_exit_assessment") or (assess_legacy_exit(position, market, technical) if legacy else None)
+    current_partial = (legacy_exit and legacy_exit["status"] == "CURRENT_PARTIAL_REVIEW") or technical["status"] == "OVERHEATED"
+    partial_reference = market.last_price if current_partial else price_plan["sell_confirmation_example"]
+    partial_policy = assess_sell_policy(position, market, sell_price=partial_reference, sell_quantity=sell if sell else None)
+    partial_status = "CURRENT_PARTIAL_REVIEW" if current_partial else "WAIT_REBOUND"
+    partial_reason = legacy_exit["reason"] if legacy else technical.get("sell_condition", "等待上涨与回落路径后复评")
+    if sell < 100:
+        partial_status, partial_reason = "NO_PARTIAL_INVENTORY", "保留底仓后不足100份，暂不安排部分卖出"
+    elif "全部" in blocked or not partial_policy["sell_allowed"]:
+        partial_status, partial_reason = "WAIT_DATA", "卖出行情或数量条件无效，等待复核"
+    partial_plan = {
+        "status": partial_status,
+        "reference_price": partial_reference if partial_status in {"CURRENT_PARTIAL_REVIEW", "WAIT_REBOUND"} else None,
+        "candidate_quantity": sell if partial_status in {"CURRENT_PARTIAL_REVIEW", "WAIT_REBOUND"} else None,
+        "reference_basis": "CURRENT_QUOTE_REVIEW" if current_partial else "FUTURE_GRID_PATH_EXAMPLE",
+        "reason": partial_reason, "sell_policy": partial_policy,
+    }
     advice.update(
         suggested_base_price=base, base_price_status="REVIEW_DRIFT" if stale_base else "REFERENCE",
         suggested_buy_fall_pct=fall, suggested_buy_rebound_pct=rebound,
         suggested_sell_rise_pct=rise, suggested_sell_pullback_pct=pullback,
         candidate_buy_quantity=None if buy_blocked else candidate_buy,
-        candidate_sell_quantity=sell or None,
+        candidate_sell_quantity=(sell or None) if "全部" not in blocked and policy["sell_allowed"] else None,
         suggested_min_base_quantity=reserve if held > 0 else None,
         current_max_position_quantity=grid.max_position_quantity if grid else None,
         buy_execution_status="DISABLED" if buy_blocked else "PENDING_BUDGET",
-        sell_execution_status="PENDING_INVENTORY" if sell > 0 else "DISABLED",
+        sell_execution_status="PENDING_INVENTORY" if sell > 0 and "全部" not in blocked and policy["sell_allowed"] else "DISABLED",
         sell_policy=policy, minimum_sell_price=None,
-        first_buy_reference_price=round(base * (1 - fall / 100) * (1 + rebound / 100), 4),
-        first_sell_reference_price=round(base * (1 + rise / 100) * (1 - pullback / 100), 4),
+        price_plan=price_plan, partial_sell_plan=partial_plan, legacy_exit_assessment=legacy_exit,
+        first_buy_reference_price=float(buy_tick),
+        first_sell_reference_price=float(sell_tick),
         quantity_plan="建仓期建议买入份额大于卖出份额，候选按至少2:1估算；资金不足时减少卖出或等待，不预支资金。" if building else "买卖份额分别配置；保留至少一半现有库存作为候选底仓。",
         buy_quantity_note=("新增投入受限，整单暂不启用" if buy_blocked else
                            "已达最大持仓或剩余额度不足100份" if ceiling is not None and ceiling - held < 100 else
@@ -162,7 +223,7 @@ def advise_grid(
         if ceiling is not None and isfinite(ceiling):
             buyback = min(buyback, int(max(0, ceiling - (held - sell)) // 100) * 100)
         advice.update(
-            action="反弹分批卖出，回款留在账户内", grid_mode="TRANSITION_MANAGEMENT",
+            action="当前评估分批退出，回款留在账户内" if partial_status == "CURRENT_PARTIAL_REVIEW" else "反弹分批卖出，回款留在账户内", grid_mode="TRANSITION_MANAGEMENT",
             grid_mode_label="现有持仓波动管理", buy_execution_status="DISABLED" if buy_blocked else "WAIT_EXECUTED_PROCEEDS",
             candidate_buy_quantity=None, conditional_buyback_quantity=buyback or None,
             suggested_min_base_quantity=reserve, liquidation_policy=assess_sell_policy(position, market),
@@ -171,7 +232,7 @@ def advise_grid(
                                    "分批卖出建议不足200份，暂不安排回补"),
             quantity_plan="卖出候选按实际网格数量或当前持仓约1/4分批；后续低位回补最多采用本笔已卖份额的一半作为候选，逐步减小旧仓，剩余回款留待目标配置。",
         )
-        advice["reasons"].insert(0, "即使清仓成本暂未核实，仍提供反弹价格、部分卖出数量和条件回补方案。此处基准采用当前价拟定新计划，实际网格需另行检查后调整。")
+        advice["reasons"].insert(0, "部分退出单独评估，清仓成本另行核验。双向参数采用当前价拟定未来计划；未来上涨条件不作为当前退出的额外前提，实际旧网格需另行检查后调整。")
         advice["strategy_guardrails"].append("回补必须在本笔卖出真实成交后重算：买入量不超过实际已卖量，金额不超过划给回补的可用回款；同一笔钱不能同时承诺给回补和目标建仓。")
     blockers = []
     if total is not None and total >= 80:
@@ -212,6 +273,19 @@ def advise_grid(
                                  "现有单笔量，受底仓约束" if valid_sell else "持仓约1/4取整，最低100份起拟"),
     }
     advice["grid_execution_status"] = "DO_NOT_ENABLE" if blockers else "PENDING_VERIFICATION"
+    if inventory is not None:
+        eligible = inventory.get("sellable_quantity")
+        advice["suggested_sell_quantity"] = advice["candidate_sell_quantity"] if eligible is not None else None
+        advice["sell_execution_status"] = "SETTLEMENT_ELIGIBLE" if advice["suggested_sell_quantity"] else "DISABLED"
+        advice["sell_quantity_note"] = (f"按{inventory.get('settlement', '')}及当日成交测算，可卖{eligible:g}份；已约束本次单笔量。"
+                                         if eligible is not None else inventory.get("note", "可卖量无法计算"))
+        advice["execution_checks"][1] = {"check": "inventory_floor", "status": "DERIVED" if eligible is not None else "PENDING",
+                                          "message": advice["sell_quantity_note"] + "同标的重叠条件单先停用，防止重复报卖。"}
+    if funding is not None:
+        capacity = funding.get("buy_capacity_under_cap")
+        advice["cash_constraint_status"] = "CAP_BLOCKED" if capacity == 0 else "ACCOUNT_CASH_CALCULATED"
+        advice["execution_checks"][0] = {"check": "cash_and_reservations", "status": "CALCULATED",
+            "message": f"账户现金{funding.get('cash')}元，组合保护线内新增买入额度{capacity}元；全部条件单共用同一资金池。"}
     advice["grid_execution_note"] = (
         "暂不启用整单：" + "；".join(blockers) if blockers else
         "启用前：核实可用资金、可卖量、累计占用及底仓保护"

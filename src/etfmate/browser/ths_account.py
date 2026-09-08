@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from pathlib import Path
@@ -46,12 +47,21 @@ def collect(root: Path, out_dir: Path) -> dict:
         (out_dir / "account_text.txt").write_text(str(snapshot.get("text", "")), encoding="utf-8")
         session.screenshot(out_dir / "account.png")
 
-        closed_snapshot = _collect_tab_snapshot(session, THS_CLOSED_TAB, out_dir / "closed_positions")
+        _click_tab(session, THS_CLOSED_TAB)
+        closed_snapshot = _collect_range_snapshot(session, THS_CLOSED_TAB, "全部", out_dir / "closed_positions")
 
         trade_snapshots: dict[str, dict[str, Any]] = {}
         _click_tab(session, THS_TRADES_TAB)
         for range_tab in THS_TRADE_RANGE_TABS:
-            trade_snapshots[range_tab] = _collect_tab_snapshot(session, range_tab, out_dir / f"trades_{_safe_name(range_tab)}")
+            trade_snapshots[range_tab] = _collect_range_snapshot(
+                session, THS_TRADES_TAB, range_tab, out_dir / f"trades_{_safe_name(range_tab)}")
+
+        end_snapshot = _collect_tab_snapshot(session, THS_POSITION_TAB, out_dir / "positions_end")
+        consistency = _collection_consistency(snapshot, end_snapshot)
+        (out_dir / "collection_consistency.json").write_text(
+            json.dumps(consistency, ensure_ascii=False, indent=2), encoding="utf-8")
+        if consistency["status"] != "PASS":
+            raise RuntimeError(f"同花顺采集前后持仓/现金不一致，不能混用交易与持仓，请重新采集：{consistency['reason']}")
 
         (out_dir / "ths_tabs_snapshot.json").write_text(
             json.dumps(
@@ -59,6 +69,8 @@ def collect(root: Path, out_dir: Path) -> dict:
                     "positions": snapshot,
                     "closed_positions": closed_snapshot,
                     "trade_records": trade_snapshots,
+                    "positions_end": end_snapshot,
+                    "collection_consistency": consistency,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -66,37 +78,186 @@ def collect(root: Path, out_dir: Path) -> dict:
             encoding="utf-8",
         )
 
-    records = _position_records_from_text(str(snapshot.get("text", "")))
-    records.extend(_records_from_snapshot(snapshot))
-    closed_records = _records_from_snapshot(closed_snapshot)
-    trade_records: list[dict] = []
-    for trade_snapshot in trade_snapshots.values():
-        trade_records.extend(_records_from_snapshot(trade_snapshot))
-    positions = _dedupe(_extract_records(records, _looks_like_position), "code", "证券代码", "symbol", "名称")
+    positions = _positions_from_snapshot(snapshot)
     account_summary = _account_summary_from_snapshot(snapshot, positions)
-    trades = _dedupe(
-        _extract_records(trade_records, _looks_like_trade),
-        "trade_id",
-        "成交编号",
-        "entrust_no",
-        "code",
-        "证券代码",
-        "trade_time",
-        "成交时间",
-        "price",
-        "成交价",
-        "quantity",
-        "成交数量",
-    )
-    closed_positions = _dedupe(_extract_records(closed_records, _looks_like_closed_position), "code", "证券代码", "symbol", "名称")
+    trades, trade_collection_quality = _merge_trade_snapshots(trade_snapshots)
+    closed_positions = _closed_positions_from_snapshot(closed_snapshot)
     return {
         "positions": positions,
         "account_summary": account_summary,
         "trades": trades,
+        "trade_collection_quality": trade_collection_quality,
         "closed_positions": closed_positions,
         "snapshot": snapshot,
         "closed_snapshot": closed_snapshot,
         "trade_snapshots": trade_snapshots,
+        "end_snapshot": end_snapshot,
+        "collection_consistency": consistency,
+    }
+
+
+def _positions_from_snapshot(snapshot: dict) -> list[dict]:
+    records = _position_records_from_text(str(snapshot.get("text", "")))
+    records.extend(_records_from_snapshot(snapshot))
+    return _dedupe(_extract_records(records, _looks_like_position), "code", "证券代码", "symbol", "名称")
+
+
+def _collection_consistency(start: dict, end: dict) -> dict:
+    """Prices may move while collecting; quantity and ledger cash must stay fixed."""
+    def fingerprint(snapshot: dict) -> dict:
+        positions = _positions_from_snapshot(snapshot)
+        quantities = {
+            _normalize_code(_pick_value(p, "code", "证券代码", "symbol")):
+            _to_number(_pick_value(p, "quantity", "持仓数量", "持有数量", default=None))
+            for p in positions
+        }
+        match = re.search(r"现金余额\s*[:：]?\s*([+-]?\d[\d,]*(?:\.\d+)?)", str(snapshot.get("text", "")))
+        cash = _to_number(match[1]) if match else None
+        return {"quantities": quantities, "cash": cash}
+    before, after = fingerprint(start), fingerprint(end)
+    valid = all(item["quantities"] and item["cash"] is not None and math.isfinite(item["cash"])
+                and all(math.isfinite(q) and q > 0 for q in item["quantities"].values())
+                for item in (before, after))
+    equal = before == after
+    return {"status": "PASS" if valid and equal else "FAIL", "start": before, "end": after,
+            "reason": "数量与现金余额一致；不要求盘中市值相同" if valid and equal else
+                      "缺少前后有效持仓/现金证据" if not valid else "采集期间数量或现金余额发生变化"}
+
+
+def _closed_positions_from_snapshot(snapshot: dict) -> list[dict]:
+    """Keep separate closed cycles of the same instrument, including virtual rows."""
+    texts = [str(snapshot.get("text") or "")]
+    texts.extend("\n".join(map(str, row)) for table in snapshot.get("tables") or []
+                 for row in table.get("rows") or [] if isinstance(row, list))
+    records = []
+    date_pattern = re.compile(r"20\d{2}-\d{2}-\d{2}")
+    for text in texts:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        for idx, value in enumerate(lines):
+            if not _is_code(value) or idx == 0 or not date_pattern.fullmatch(lines[idx - 1]):
+                continue
+            window = lines[idx:idx + 13]
+            if len(window) < 12 or not _looks_like_number(window[2]) or not date_pattern.fullmatch(window[11]):
+                continue
+            records.append({"code": value, "name": window[1], "close_date": lines[idx - 1],
+                            "open_date": window[11], "total_pnl": window[2], "pnl_pct": window[3],
+                            "buy_average_price": window[6], "sell_average_price": window[7],
+                            "holding_days": window[9], "fee": window[10],
+                            "note": window[12] if len(window) > 12 and window[12] != "--" else "",
+                            "source": "ths_closed_cycle", "raw_text": "\n".join([lines[idx - 1], *window])})
+    return _dedupe(records, "code", "open_date", "close_date", "total_pnl", "fee")
+
+
+def _trade_identity(item: dict) -> tuple[str, bool]:
+    trade_id = _pick_value(item, "trade_id", "成交编号", default=None)
+    code = _normalize_code(_pick_value(item, "code", "symbol", "stockCode", "zqdm", "证券代码", "代码"))
+    if trade_id not in (None, ""):
+        return f"trade_id:{code}:{trade_id}", True
+    date = str(_pick_value(item, "trade_date", "成交日期", default="")).replace("/", "-").replace(".", "-")
+    side = str(_pick_value(item, "side", "bsFlag", "business_name", "买卖方向", "方向", "类型", default=""))
+    stamp = str(_pick_value(item, "trade_time", "成交时间", default=""))
+    price = _to_number(_pick_value(item, "price", "dealPrice", "成交价", "成交价格"))
+    quantity = _to_number(_pick_value(item, "quantity", "dealAmount", "成交数量"))
+    return f"fields:{code}:{date}:{side}:{stamp}:{price:.12g}:{quantity:.12g}", False
+
+
+def _screen_trade_groups(snapshot: dict) -> list[tuple[str, list[dict]]]:
+    """Prefer table rows, which preserve within-screen transaction multiplicity."""
+    groups: list[tuple[str, list[dict]]] = []
+    for table_index, table in enumerate(snapshot.get("tables") or []):
+        headers = [str(value).strip() for value in table.get("headers") or []]
+        parsed = []
+        for row_index, row in enumerate(table.get("rows") or []):
+            if not isinstance(row, list):
+                continue
+            structured = {headers[index]: value for index, value in enumerate(row) if index < len(headers)}
+            if _looks_like_trade(structured):
+                rows = [{**structured,
+                         "code": _normalize_code(_pick_value(structured, "code", "symbol", "stockCode", "zqdm", "证券代码", "代码")),
+                         "name": _pick_value(structured, "name", "证券名称", "名称", default=""),
+                         "trade_date": _pick_value(structured, "trade_date", "成交日期", default=""),
+                         "trade_time": _pick_value(structured, "trade_time", "成交时间", default=""),
+                         "side": _pick_value(structured, "side", "bsFlag", "business_name", "买卖方向", "方向", "类型", default=""),
+                         "price": _pick_value(structured, "price", "dealPrice", "成交价", "成交价格", default=None),
+                         "quantity": _pick_value(structured, "quantity", "dealAmount", "成交数量", default=None),
+                         "amount": _pick_value(structured, "amount", "dealBalance", "成交金额", default=None),
+                         "fee": _pick_value(structured, "fee", "交易费用", "手续费", default=None)}]
+            else:
+                rows = _trade_records_from_text("\n".join(str(value) for value in row))
+            parsed.extend({**item, "source_row_index": row_index} for item in rows)
+        if parsed:
+            groups.append((f"table:{table_index}", parsed))
+    if groups:
+        return groups
+    return [("text", [{**item, "source_row_index": index}
+                       for index, item in enumerate(_trade_records_from_text(str(snapshot.get("text") or "")))])]
+
+
+def _merge_trade_snapshots(snapshots: dict[str, dict]) -> tuple[list[dict], dict]:
+    """Take observed multiplicity, never globally set-dedupe identical fills.
+
+    Without execution IDs, a repeated key across scrolling screens cannot prove
+    whether the rows are different fills. Keep the maximum observed count as a
+    lower bound and expose that ambiguity; do not infer extra trades.
+    """
+    merged: dict[str, list[dict]] = {}
+    sources: dict[str, list[dict]] = {}
+    ambiguities: dict[str, set[str]] = {}
+    for view, snapshot in snapshots.items():
+        screens = snapshot.get("scroll_snapshots") or [snapshot]
+        seen_screens: dict[str, set[int]] = {}
+        for screen_index, screen in enumerate(screens):
+            for representation, rows in _screen_trade_groups(screen):
+                grouped: dict[str, list[dict]] = {}
+                for item in rows:
+                    key, verified_id = _trade_identity(item)
+                    grouped.setdefault(key, []).append(item)
+                    source = {"view": view, "screen": screen_index,
+                              "representation": representation, "row_index": item["source_row_index"]}
+                    sources.setdefault(key, []).append(source)
+                    if not verified_id:
+                        seen_screens.setdefault(key, set()).add(screen_index)
+                        if representation == "text" and not snapshot.get("scroll_snapshots") and (snapshot.get("scroll_steps") or 0) > 1:
+                            ambiguities.setdefault(key, set()).add(f"{view}:只有合并文本，无法区分真实重复与滚动重叠")
+                for key, items in grouped.items():
+                    if key.startswith("trade_id:"):
+                        items = items[:1]
+                    elif representation == "text" and len(items) > 1:
+                        ambiguities.setdefault(key, set()).add(f"{view}:仅页面文本存在同键重复，缺少独立表格行归属")
+                        items = items[:1]
+                    elif representation == "text" and key in ambiguities and not snapshot.get("scroll_snapshots"):
+                        # A merged text can duplicate the same row arbitrarily.
+                        items = items[:1]
+                    if len(items) > len(merged.get(key, [])):
+                        merged[key] = items
+        for key, indexes in seen_screens.items():
+            if len(indexes) > 1:
+                ambiguities.setdefault(key, set()).add(f"{view}:同键出现在多个滚动屏，实际笔数仅有已观察下限")
+    # An execution with an ID may also appear in another view without its ID.
+    # Count the maximum observed multiplicity, not identified + anonymous rows.
+    identified: dict[str, list[str]] = {}
+    for key, rows in merged.items():
+        if key.startswith("trade_id:"):
+            anonymous = {name: value for name, value in rows[0].items() if name not in {"trade_id", "成交编号"}}
+            economic_key, _ = _trade_identity(anonymous)
+            identified.setdefault(economic_key, []).append(key)
+    for key, execution_keys in identified.items():
+        if key not in merged:
+            continue
+        for execution_key in execution_keys:
+            sources[execution_key].extend(sources[key])
+        remaining = max(0, len(merged[key]) - len(execution_keys))
+        merged[key] = merged[key][:remaining]
+    trades = []
+    for key, rows in merged.items():
+        for ordinal, item in enumerate(rows, start=1):
+            trades.append({**item, "source_occurrence_key": key, "source_occurrence_ordinal": ordinal,
+                           "source_evidence": sources[key], "occurrence_ambiguous": key in ambiguities})
+    return trades, {
+        "merge_contract": "trade_view_occurrences_v1", "cycle_complete": False,
+        "count_basis": "max_observed_occurrences_per_key_across_views",
+        "ambiguities": [{"key": key, "reasons": sorted(reasons)} for key, reasons in ambiguities.items()],
+        "note": "列表采集与持仓完整周期分别核验；无成交编号的跨屏同键记录只保留已观察笔数下限。",
     }
 
 
@@ -120,6 +281,9 @@ def extract_watchlist(snapshot: dict[str, Any]) -> tuple[list[dict], list[dict]]
 
 def _collect_tab_snapshot(session: WebAccessSession, tab_label: str, evidence_dir: Path) -> dict[str, Any]:
     clicked = _click_tab(session, tab_label)
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    # Background virtual lists can defer painting until a browser capture.
+    session.screenshot(evidence_dir / "selected.png")
     snapshot = _collect_scroll_loaded_snapshot(session, tab_label)
     snapshot["tab_label"] = tab_label
     snapshot["tab_clicked"] = clicked
@@ -128,6 +292,97 @@ def _collect_tab_snapshot(session: WebAccessSession, tab_label: str, evidence_di
     (evidence_dir / "text.txt").write_text(str(snapshot.get("text", "")), encoding="utf-8")
     session.screenshot(evidence_dir / "screen.png")
     return snapshot
+
+
+def _collect_range_snapshot(session: WebAccessSession, tab_label: str, range_label: str,
+                            evidence_dir: Path, timeout_seconds: float = 15) -> dict[str, Any]:
+    scope = ".position_clear_list" if tab_label == THS_CLOSED_TAB else ".trade_history_list_top_tool_box"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    clicked = session.eval(_click_date_range_js(scope, range_label))
+    if clicked is not True:
+        raise RuntimeError(f"同花顺{tab_label}未找到可点击的时间范围：{range_label}")
+    custom_dates = None
+    if range_label == "自定义":
+        # Opening the date controls does not submit a query. Keep and disclose
+        # the real UI dates, instead of pretending an unsubmitted edit applied.
+        state = _wait_range_state(session, scope, range_label, timeout_seconds, require_ready=False)
+        custom_dates = state.get("custom_dates")
+        if not isinstance(custom_dates, list) or len(custom_dates) != 2 or not all(
+                re.fullmatch(r"(?:19|20)\d{2}-\d{2}-\d{2}", str(value)) for value in custom_dates):
+            raise RuntimeError("同花顺自定义交易区间缺少两个真实日期")
+        if custom_dates[0] > custom_dates[1]:
+            raise RuntimeError("同花顺自定义交易区间起止日期倒置")
+        query_clicked = session.eval(f"""(() => {{
+          const root = document.querySelector({json.dumps(scope)});
+          const query = root && root.querySelector('.buttons_find_custom_button');
+          if (!query || query.textContent.trim() !== '查询') return false;
+          query.click(); return true;
+        }})()""")
+        if query_clicked is not True:
+            raise RuntimeError("同花顺自定义区间未实际提交查询")
+    session.screenshot(evidence_dir / "filter_selected.png")
+    before = _wait_range_state(session, scope, range_label, timeout_seconds, custom_dates=custom_dates)
+    snapshot = _collect_scroll_loaded_snapshot(session, f"{tab_label}:{range_label}")
+    after = _as_dict(session.eval(_date_range_state_js(scope)))
+    if not _range_state_matches(after, range_label, custom_dates, require_ready=True):
+        raise RuntimeError(f"同花顺{tab_label}采集期间时间范围改变或数据未就绪：{range_label}")
+    snapshot.update({"tab_label": tab_label, "tab_clicked": True, "range_filter": {
+        "contract": "ths_date_range_v1", "requested": range_label, "selected": after["selected"],
+        "verified": True, "query_submitted": range_label == "自定义",
+        "custom_dates": custom_dates, "before": before, "after": after,
+        "note": "已验证实际选中态；列表范围不等于完整持仓周期。",
+    }})
+    (evidence_dir / "snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    (evidence_dir / "text.txt").write_text(str(snapshot.get("text", "")), encoding="utf-8")
+    session.screenshot(evidence_dir / "screen.png")
+    return snapshot
+
+
+def _range_state_matches(state: dict, label: str, custom_dates: list | None,
+                         require_ready: bool) -> bool:
+    return (state.get("selected") == label and
+            (custom_dates is None or state.get("custom_dates") == custom_dates) and
+            (not require_ready or state.get("ready") is True))
+
+
+def _wait_range_state(session: WebAccessSession, scope: str, label: str, timeout_seconds: float,
+                      custom_dates: list | None = None, require_ready: bool = True) -> dict:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        state = _as_dict(session.eval(_date_range_state_js(scope)))
+        if _range_state_matches(state, label, custom_dates, require_ready):
+            return state
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"同花顺时间筛选未生效或列表未就绪：请求{label}，实际{state.get('selected')}，状态{state}")
+        time.sleep(0.25)
+
+
+def _click_date_range_js(scope: str, label: str) -> str:
+    return f"""(() => {{
+      const root = document.querySelector({json.dumps(scope)});
+      const item = root && Array.from(root.querySelectorAll('.buttons_date_picker_box_button_item'))
+        .find(el => el.textContent.trim() === {json.dumps(label, ensure_ascii=False)});
+      if (!item) return false;
+      item.scrollIntoView({{block:'center'}}); item.click(); return true;
+    }})()"""
+
+
+def _date_range_state_js(scope: str) -> str:
+    return f"""(() => {{
+      const root = document.querySelector({json.dumps(scope)});
+      if (!root) return {{selected:null,ready:false}};
+      const content = root.matches('.position_clear_list') ? root : root.parentElement;
+      const text = content.innerText || '';
+      const selected = root.querySelector('.buttons_date_picker_box_button_item.selected_item');
+      const customDates = Array.from(root.querySelectorAll('#buttons_date_picker_dates input')).map(el=>el.value);
+      const loading = Array.from(content.querySelectorAll('[aria-busy="true"],.ant-spin-spinning'))
+        .some(el=>el.getBoundingClientRect().height>0);
+      const rowCount = Array.from(content.querySelectorAll('tbody tr'))
+        .filter(el=>/(^|\\n)\\d{{6}}(\\n|$)/.test(el.innerText || '')).length;
+      const empty = /当前.*记录为空|暂无.*(?:数据|记录)|暂无成交/.test(text);
+      return {{selected:selected ? selected.textContent.trim() : null,custom_dates:customDates,
+               row_count:rowCount,empty,loading,ready:!loading && (rowCount>0 || empty)}};
+    }})()"""
 
 
 def _click_tab(session: WebAccessSession, tab_label: str, timeout_seconds: int = 20) -> bool:
@@ -532,7 +787,7 @@ def _looks_like_position(item: dict) -> bool:
 def _looks_like_trade(item: dict) -> bool:
     keys = set(item)
     has_code = any(_is_code(item.get(key)) for key in ("code", "symbol", "stockCode", "zqdm", "证券代码", "代码"))
-    has_side = any(key in keys for key in ("side", "bsFlag", "business_name", "买卖方向", "方向"))
+    has_side = any(key in keys for key in ("side", "bsFlag", "business_name", "买卖方向", "方向", "类型"))
     has_price = any(key in keys for key in ("price", "dealPrice", "成交价", "成交价格"))
     return has_code and has_side and has_price
 
@@ -565,12 +820,26 @@ def _dedupe(items: list[dict], *keys: str) -> list[dict]:
 def _trade_records_from_text(text: str) -> list[dict]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     records: list[dict] = []
+    date_pattern = re.compile(r"20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?")
+    sides = {"买入", "卖出", "申购", "赎回"}
     for idx, line in enumerate(lines):
-        if not _is_code(line):
+        if not _is_code(line) or idx + 2 >= len(lines) or lines[idx + 2] not in sides:
             continue
-        next_idx = next((pos for pos in range(idx + 1, len(lines)) if _is_code(lines[pos])), min(len(lines), idx + 16))
+        # The displayed date precedes the code. A block ending at the next code
+        # contains the next trade's date, shifting records and losing the last
+        # row. Keep dates with their own row, including date-only final rows.
+        row_date = lines[idx - 1] if idx > 0 and date_pattern.fullmatch(lines[idx - 1]) else ""
+        row_time = ""
+        if not row_date and idx > 1 and re.fullmatch(r"\d{1,2}:\d{2}(?::\d{2})?", lines[idx - 1]) and date_pattern.fullmatch(lines[idx - 2]):
+            row_date, row_time = lines[idx - 2], lines[idx - 1]
+        if not row_date:
+            continue
+        next_idx = next((pos for pos in range(idx + 3, len(lines))
+                         if date_pattern.fullmatch(lines[pos])
+                         or (_is_code(lines[pos]) and pos + 2 < len(lines) and lines[pos + 2] in sides)),
+                        min(len(lines), idx + 16))
         window = lines[idx:next_idx]
-        block = "\n".join(window)
+        block = "\n".join([row_date, *([row_time] if row_time else []), *window])
         side_idx = next((pos for pos, item in enumerate(window) if item in {"买入", "卖出", "申购", "赎回"}), -1)
         if side_idx < 0:
             continue
@@ -582,7 +851,7 @@ def _trade_records_from_text(text: str) -> list[dict]:
         if len(numeric_fields) < 3:
             continue
         side = window[side_idx]
-        date_match = re.search(r"20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}", block)
+        date_match = re.search(r"20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}", row_date)
         if not date_match:
             continue
         time_match = re.search(r"\d{1,2}:\d{2}(?::\d{2})?", block)

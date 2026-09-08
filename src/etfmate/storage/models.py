@@ -134,6 +134,9 @@ class MarketSnapshot:
     signal_date: str | None = None
     previous_rsi6: float | None = None
     recent_oversold_count5: float | None = None
+    quote_time: str | None = None
+    signal_is_complete: bool | None = None
+    signal_volume_basis: str | None = None
 
 
 def to_dict(value: Any) -> Any:
